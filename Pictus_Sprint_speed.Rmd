@@ -1,0 +1,1505 @@
+---
+title: "Pictus_sprint_data"
+author: "Daniel Ritchie"
+date: "2024-03-27"
+output: html_document
+---
+
+
+```{r}
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(lme4)
+library(dplyr)
+library(rptR)
+library(lmPerm)
+library(nls.multstart)
+library(purrr)
+library(rTPC)
+library(broom)
+library(ggrepel)
+```
+
+```{r}
+## IMPORT DATA
+pictus_sprint <- read_csv("~/Desktop/phd/Documents/Chapter 3/Datasheets/Sprint_speed_data.csv")
+#pictus_sprint$ID <- as.factor(pictus_sprint$ID)
+#pictus_sprint$Test_temp < as.factor(pictus_sprint$Test_temp)
+```
+```{r}
+str(pictus_sprint)
+```
+
+#iam changing this factor to numeric 
+```{r}
+#pictus_sprint$'1m_speed' < as.numeric(pictus_sprint$'1m_speed')
+```
+
+
+
+
+```{r}
+library(ggplot2)
+library(dplyr)
+
+
+# Calculate the mean and standard error per group
+pictus_sprintsummary <- pictus_sprint %>%
+  group_by(Test_temp, Pop) %>%
+  summarize(
+    Mean_sprint = mean(fastest_25cm  , na.rm = TRUE),
+    SE_sprint = sd(fastest_25cm  , na.rm = TRUE) / sqrt(sum(!is.na(fastest_25cm  )))
+  )
+```
+
+
+```{r}
+# Create the ggplot with summarized data
+pictus_sprintL_av <- ggplot(pictus_sprintsummary, aes(x = Test_temp, y = Mean_sprint, colour=Pop)) +
+  geom_line() +
+  geom_point() +
+  geom_errorbar(aes(ymin = Mean_sprint - SE_sprint, ymax = Mean_sprint + SE_sprint), width = 0.1) +
+  labs(x = "Test temperature", y = "Fastest 25cm sprint (m/s)") +
+  
+  scale_color_discrete(name = "Population") +
+  facet_grid(. ~ Pop) +  # Add facet_grid for BPA levels
+  theme_classic()
+
+pictus_sprintL_av
+
+```
+```{r}
+library(ggplot2)
+library(dplyr)
+
+
+# Calculate the mean and standard error per group
+pictus_sprintsummary1m <- pictus_sprint %>%
+  group_by(Test_temp, Pop) %>%
+  summarize(
+    Mean_sprint = mean(onem_speed   , na.rm = TRUE),
+    SE_sprint = sd(onem_speed    , na.rm = TRUE) / sqrt(sum(!is.na(onem_speed   )))
+  )
+```
+
+
+
+```{r}
+# Create the ggplot with summarized data
+pictus_sprint1m <- ggplot(pictus_sprintsummary1m, aes(x = Test_temp, y = Mean_sprint, colour=Pop)) +
+  geom_line() +
+  geom_point() +
+  geom_errorbar(aes(ymin = Mean_sprint - SE_sprint, ymax = Mean_sprint + SE_sprint), width = 0.1) +
+  labs(x = "Test temperature", y = "Fastest 1m sprint (m/s)") +
+  
+  scale_color_discrete(name = "Population") +
+  facet_grid(. ~ Pop) +  # Add facet_grid for BPA levels
+  theme_classic()
+
+pictus_sprint1m
+
+```
+
+
+
+
+
+
+
+```{r}
+pictus_KNGA <- filter(pictus_sprint, Pop=="KNGA")
+pictus_MR <- filter(pictus_sprint, Pop=="MR")
+pictus_NGKT <- filter(pictus_sprint, Pop=="NGKT")
+pictus_STURT <- filter(pictus_sprint, Pop=="STURT")
+```
+
+```{r}
+pictus_KNGA_TPC <- ggplot(pictus_KNGA, aes(x = Body_temp, y = fastest_25cm)) +
+  geom_line(aes(group = ID)) +
+  geom_point() +
+  labs(x = "Temp", y = "m/s") +
+  #ggtitle("Individual Growth Curves Male/DMSO Grouped by Temperature") +
+  # facet_grid(. ~ ID) +
+  scale_color_discrete(name = "Temperature")+
+
+   theme_classic()   
+
+pictus_KNGA_TPC
+```
+
+
+```{r}
+pictus_bodytemp_sprint <- ggplot(pictus_sprint, aes(x = Body_temp, y= fastest_25cm, colour=Pop))+
+   geom_point() + 
+  stat_smooth(method = "gam", formula = y ~ s(x, bs = "cs"), level=0.9)+
+   facet_grid(. ~ Clade) +  # Add facet_grid for BPA levels
+  theme_classic()
+pictus_bodytemp_sprint
+```
+
+
+
+
+
+## Analyse using rTPC
+
+```{r}
+# Check single curves to identify "bad" or "illogical" points which may cause problems later, i reccomending going through all ID curves 
+
+d <- filter(pictus_clean, ID == 293)
+
+# show the data
+ggplot(pictus_clean, aes(Body_temp, fastest_25cm, colour=Pop)) +
+  geom_point() +
+   #stat_smooth(method = "gam", formula = y ~ s(x, bs = "cs"), level=0.9)+
+  theme_bw(base_size = 12) +
+  facet_wrap(~ID) +
+  labs(x = 'Temperature (ºC)',
+       y = 'Sprint speed 25 cm m/s')
+```
+
+
+#TPC Data Prep Sprint 
+
+
+```{r}
+## IMPORT DATA
+# Use this data sheet as an example, data should be in a long format
+
+pictus_clean <- read_csv("~/Desktop/phd/Documents/Chapter 3/Datasheets/Sprint_speed_data.csv")
+
+
+
+# Simplify to only necessary variables, turn ID into factor, make sure body_temp and speed are numeric.
+
+### MAKE SURE ALL THESE VARIBLES ARE RECORDED PROPERLY, RTPC WILL NOT WORK IF AN INDIVIDUAL HAS TWO VALUES FOR TREATMENT ETC...
+
+
+pictus_clean$ID <- as.factor(pictus_clean$ID)
+pictus_clean$Clade <- as.factor(pictus_clean$Clade)
+pictus_clean$Pop <- as.factor(pictus_clean$Pop)
+pictus_clean$Treatment <- as.factor(pictus_clean$Treatment)
+pictus_clean$Body_temp <- as.numeric(pictus_clean$Body_temp)
+pictus_clean$fastest_25cm <- as.numeric(pictus_clean$fastest_25cm)
+pictus_clean <- select(pictus_clean, ID, Body_temp, SVL, Pop, Treatment, Clade, fastest_25cm, onem_speed)
+
+```
+
+
+#SPrint TPC GENERATION 
+#generate you tpc function and fit this to curves 
+
+```{r}
+library(purrr)
+# Do not touch this section below 
+#prog bar
+
+nls_multstart_progress <- function(formula, data = parent.frame(), iter, start_lower, 
+                                   start_upper, supp_errors = c("Y", "N"), convergence_count = 100, 
+                                   control, modelweights, ...){
+  if(!is.null(pb)){
+    pb$tick()
+  }
+  nls_multstart(formula = formula, data = data, iter = iter, start_lower = start_lower, 
+                start_upper = start_upper, supp_errors = supp_errors, convergence_count = convergence_count, 
+                control = control, modelweights = modelweights, ...)
+}
+
+# start progress bar and estimate time it will take
+number_of_models <- 1
+number_of_curves <- length(unique(pictus_clean$ID))
+
+# setup progress bar
+pb <- progress::progress_bar$new(total = number_of_curves*number_of_models,
+                                 clear = FALSE,
+                                 format ="[:bar] :percent :elapsedfull")
+```
+
+
+```{r}
+#reduce dataframe again to simplest form, same as above
+data.rtpc<-pictus_clean %>% 
+  arrange(ID, Body_temp) %>%
+  select(Body_temp, ID, Pop, Treatment, fastest_25cm)
+
+
+# fit chosen model formulation in rTPC
+# Make sure the below code is exactly the same except for changing body temp and fastest_25
+```
+
+
+```{r}
+d_fits <- nest(data.rtpc, data = c(Body_temp, fastest_25cm)) %>%
+dplyr::mutate(boatman = purrr::map(data, ~nls_multstart(fastest_25cm ~ boatman_2017(temp = Body_temp, rmax, tmin, tmax, a,b),
+                        data = .x,
+                        iter = c(4,4,4,4,4),
+                        start_lower = get_start_vals(.x$Body_temp, .x$fastest_25cm, model_name = 'boatman_2017') - 10,
+                        start_upper = get_start_vals(.x$Body_temp, .x$fastest_25cm, model_name = 'boatman_2017') + 10,
+                        lower = get_lower_lims(.x$Body_temp, .x$fastest_25cm, model_name = 'boatman_2017'),
+                        upper = get_upper_lims(.x$Body_temp, .x$fastest_25cm, model_name = 'boatman_2017'),
+                        supp_errors = 'Y',
+                        convergence_count = FALSE)),
+quadratic = map(data, ~nls_multstart(fastest_25cm~quadratic_2008(temp = Body_temp, a, b, c),
+                        data = .x,
+                        iter = c(4,4,4),
+                        start_lower = get_start_vals(.x$Body_temp, .x$fastest_25cm, model_name = 'quadratic_2008') - 0.5,
+                        start_upper = get_start_vals(.x$Body_temp, .x$fastest_25cm, model_name = 'quadratic_2008') + 0.5,
+                        lower = get_lower_lims(.x$Body_temp, .x$fastest_25cm, model_name = 'quadratic_2008'),
+                        upper = get_upper_lims(.x$Body_temp, .x$fastest_25cm, model_name = 'quadratic_2008'),
+                        supp_errors = 'Y',
+                        convergence_count = FALSE)),
+        beta = map(data, ~nls_multstart(fastest_25cm~betatypesimplified_2008(temp = Body_temp,  rho, alpha, beta),
+                        data = .x,
+                        iter = c(6,6,6),
+                        start_lower = get_start_vals(.x$Body_temp, .x$fastest_25cm, model_name = 'betatypesimplified_2008') - 10,
+                        start_upper = get_start_vals(.x$Body_temp, .x$fastest_25cm, model_name = 'betatypesimplified_2008') + 10,
+                        lower = get_lower_lims(.x$Body_temp, .x$fastest_25cm, model_name = 'betatypesimplified_2008'),
+                        upper = get_upper_lims(.x$Body_temp, .x$fastest_25cm, model_name = 'betatypesimplified_2008'),
+                        supp_errors = 'Y',
+                        convergence_count = FALSE)),
+ gaussian = map(data, ~nls_multstart(fastest_25cm~gaussian_1987(temp = Body_temp, rmax, topt, a),
+                        data = .x,
+                        iter = c(4,4,4),
+                        start_lower = get_start_vals(.x$Body_temp, .x$fastest_25cm, model_name = 'gaussian_1987') - 10,
+                        start_upper = get_start_vals(.x$Body_temp, .x$fastest_25cm, model_name = 'gaussian_1987') + 10,
+                        lower = get_lower_lims(.x$Body_temp, .x$fastest_25cm, model_name = 'gaussian_1987'),
+                        upper = get_upper_lims(.x$Body_temp, .x$fastest_25cm, model_name = 'gaussian_1987'),
+                        supp_errors = 'Y',
+                        convergence_count = FALSE)))
+```
+
+
+
+
+```{r}
+# make sure to again include all the variables you want for later analysis in the below "select" function
+d_preds <- dplyr::mutate(d_fits, new_data = map(data, ~tibble(temp = seq(min(.x$Body_temp), max(.x$Body_temp), length.out = 1000)))) %>%
+  select(., -data) %>%
+  pivot_longer(., names_to = 'model_name', values_to = 'fit', c(boatman:gaussian)) %>%
+  mutate(preds = map2(fit, new_data, ~broom::augment(.x, new_data = .y))) %>%
+  select(model_name, ID, Pop, Treatment, preds) %>%
+  unnest(preds)
+
+# stack models
+d_stack <- select(d_fits, -data) %>%
+  pivot_longer(., names_to = 'model_name', values_to = 'fit', c(boatman:gaussian))
+library(broom)
+# get predictions using augment
+newdata <- tibble(temp = seq(min(data.rtpc$Body_temp), max(data.rtpc$Body_temp), length.out = 100))
+
+
+# take a random point from each model for labelling
+d_labs <- filter(d_preds, Body_temp < 30) %>%
+  group_by(., model_name) %>%
+  sample_n(., 1) %>%
+  ungroup()
+
+# plot
+ggplot(d_preds, aes(Body_temp, .fitted)) +
+  geom_line(aes(col = model_name)) +
+  geom_label_repel(aes(Body_temp, .fitted, label = model_name, col = model_name), fill = 'white', nudge_y = 0.8, segment.size = 0.2, segment.colour = 'grey50', d_labs) +
+  geom_point(aes(Body_temp, fastest_25cm), data.rtpc) +
+  theme_bw(base_size = 12) +
+  theme(legend.position = 'none') +
+  labs(x = 'Temperature (ºC)',
+       y = 'Sprint speed (m/s)') +
+facet_wrap(~ID) +
+  geom_hline(aes(yintercept = 0), linetype = 2) +
+  scale_color_brewer(type = 'qual', palette = 2)
+```
+
+```{r}
+d_ic <- d_stack %>%
+  mutate(., info = map(fit, glance),
+         AICc =  map_dbl(fit, MuMIn::AICc)) %>%
+  select(-fit) %>%
+  unnest(info) %>%
+  select(model_name, Pop, ID,Treatment, sigma, AIC, AICc, BIC, df.residual)
+
+d_ic
+```
+
+```{r}
+# Calculate mean ICC for each model across all individuals
+mean_icc_per_model <- d_ic %>%
+  group_by(model_name) %>%
+  summarize(mean_AIC = mean(AIC, na.rm = TRUE))
+
+# Select the best model based on the lowest AIC
+best_model <- mean_icc_per_model %>%
+  filter(mean_AIC == min(mean_AIC)) %>%
+  pull(model_name)
+
+# Display results
+best_model
+mean_icc_per_model
+
+
+# get colour code
+col_best_mod = RColorBrewer::brewer.pal(n = 6, name = "Dark2")[6]
+
+# plot
+ggplot(d_preds, aes(Body_temp, .fitted)) +
+  geom_line(aes(group = model_name), col = 'grey50', alpha = 0.5) +
+  geom_line(data = filter(d_preds, model_name == best_model), col = col_best_mod) +
+  geom_label_repel(aes(Body_temp, .fitted, label = model_name), fill = 'white', nudge_y = 0.8, segment.size = 0.2, segment.colour = 'grey50', data = filter(d_labs, model_name == best_model), col = col_best_mod) +
+   geom_point(aes(Body_temp, fastest_25cm), data.rtpc) +
+  theme_bw(base_size = 12) +
+  facet_wrap(~ID) +
+  theme(legend.position = 'none') +
+  labs(x = 'Temperature (ºC)',
+       y = 'Metabolic rate',
+       title = 'Respiration across temperatures',
+       subtitle= 'The Sharpe-Schoolfield model is the best model') +
+  geom_hline(aes(yintercept = 0), linetype = 2) 
+```
+
+
+## Now that model selection has been performed the Confidence intervals can be calculated for curves
+
+
+```{r}
+pictus_clean <- read_csv("~/Desktop/phd/Documents/Chapter 3/Datasheets/Sprint_speed_data.csv")
+
+
+
+# Simplify to only necessary variables, turn ID into factor, make sure body_temp and speed are numeric.
+
+### MAKE SURE ALL THESE VARIBLES ARE RECORDED PROPERLY, RTPC WILL NOT WORK IF AN INDIVIDUAL HAS TWO VALUES FOR TREATMENT ETC...
+
+pictus_clean <- select(pictus_clean, ID, Body_temp, SVL, Pop, Treatment, Clade, fastest_25cm, onem_speed)
+pictus_clean$ID <- as.factor(pictus_clean$ID)
+pictus_clean$Clade <- as.factor(pictus_clean$Clade)
+pictus_clean$Pop <- as.factor(pictus_clean$Pop)
+pictus_clean$Treatment <- as.factor(pictus_clean$Treatment)
+pictus_clean$Body_temp <- as.numeric(pictus_clean$Body_temp)
+pictus_clean$fastest_25cm <- as.numeric(pictus_clean$fastest_25cm)
+data.rtpc<-pictus_clean %>% 
+  arrange(ID, Body_temp) %>%
+  select(Body_temp, ID, Pop, SVL, Treatment, Clade, fastest_25cm)
+
+
+
+
+d_fits <- nest(data.rtpc, data = c(Body_temp, fastest_25cm)) %>%
+dplyr::mutate(boatman = purrr::map(data, ~nls_multstart(fastest_25cm ~ boatman_2017(temp = Body_temp, rmax, tmin, tmax, a,b),
+                        data = .x,
+                        iter = c(4,4,4,4,4),
+                        start_lower = get_start_vals(.x$Body_temp, .x$fastest_25cm, model_name = 'boatman_2017') - 10,
+                        start_upper = get_start_vals(.x$Body_temp, .x$fastest_25cm, model_name = 'boatman_2017') + 10,
+                        lower = get_lower_lims(.x$Body_temp, .x$fastest_25cm, model_name = 'boatman_2017'),
+                        upper = get_upper_lims(.x$Body_temp, .x$fastest_25cm, model_name = 'boatman_2017'),
+                        supp_errors = 'Y',
+                        convergence_count = FALSE)))
+
+d_preds <- dplyr::mutate(d_fits, new_data = map(data, ~tibble(temp = seq(min(.x$Body_temp), max(.x$Body_temp), length.out = 1000)))) %>%
+  select(., -data) %>%
+  pivot_longer(., names_to = 'model_name', values_to = 'fit', c(boatman)) %>%
+  mutate(preds = map2(fit, new_data, ~broom::augment(.x, new_data = .y))) %>%
+  select(ID, model_name, SVL, Pop, Treatment, Clade, preds) %>%
+  unnest(preds)
+
+
+ggplot(data.rtpc, aes(Body_temp, fastest_25cm)) +
+  geom_point(size = 2) +
+  geom_line(aes(Body_temp, .fitted), d_preds) +
+  theme_bw(base_size = 12) +
+  labs(x = 'Temperature (ºC)',
+       y = 'Sprint speed (m/s)',
+       title = 'Metabolic rate across temperatures') +
+  facet_wrap(~ID)
+
+
+# get coefs
+d_fits <- mutate(d_fits, coefs = map(boatman, coef))
+library(minpack.lm)
+# fit with nlsLM instead
+d_fits <- mutate(d_fits, nls_fit = map2(data, coefs, ~nlsLM(fastest_25cm ~ boatman_2017(Body_temp, rmax, tmin, tmax, a,b),
+                                        data = .x,
+                                        start = .y,
+                                        lower = get_lower_lims(.x$Body_temp, .x$fastest_25cm,  model_name = 'boatman_2017'),
+                                        upper = get_upper_lims(.x$Body_temp, .x$fastest_25cm,  model_name = 'boatman_2017'))))
+
+head(d_fits)
+
+d_fits$nls_fit[[1]]
+
+library(car)
+# create empty list column
+library(minpack.lm)
+d_fits <- mutate(d_fits, bootstrap = list(rep(NA, n())))
+
+# run for loop to bootstrap each refitted model
+for(i in 1:nrow(d_fits)){
+  temp_data <- d_fits$data[[i]]
+  temp_fit <- minpack.lm::nlsLM(fastest_25cm ~ 'boatman_2017'(Body_temp, rmax, tmin, tmax, a,b),
+               data = temp_data,
+               start = d_fits$coefs[[i]],
+               lower = get_lower_lims(temp_data$Body_temp, temp_data$fastest_25cm, model_name = 'boatman_2017'),
+               upper = get_upper_lims(temp_data$Body_temp, temp_data$fastest_25cm, model_name = 'boatman_2017'))
+  boot <- Boot(temp_fit, method = 'residual')
+  d_fits$bootstrap[[i]] <- boot
+  rm(list = c('temp_fit', 'temp_data', 'boot'))
+}
+
+d_fits
+
+# get the raw values of each bootstrap
+d_fits <- mutate(d_fits, output_boot = map(bootstrap, function(x) x$t))
+
+
+
+# calculate predictions with a gnarly written function
+d_fits <- mutate(d_fits, preds = map2(output_boot, data, function(x, y){
+  temp <- as.data.frame(x) %>%
+    drop_na() %>%
+    mutate(iter = 1:n()) %>%
+    group_by_all() %>%
+    do(data.frame(Body_temp = seq(min(y$Body_temp), max(y$Body_temp), length.out = 1000))) %>%
+    ungroup() %>%
+    mutate(pred ='boatman_2017'(Body_temp, rmax, tmin, tmax, a,b))
+  return(temp)
+}))
+
+# select, unnest and calculate 95% CIs of predictions
+boot_conf_preds <- select(d_fits, ID, preds) %>%
+  unnest(preds) %>%
+  group_by(ID, Body_temp) %>%
+  summarise(conf_lower = quantile(pred, 0.025, na.rm = TRUE),
+            conf_upper = quantile(pred, 0.975, na.rm = TRUE),
+            .groups = 'drop')
+
+fastest_params <- pivot_longer(d_fits, names_to = 'model_name', values_to = 'fit', boatman) %>%
+  mutate(params = map(fit, calc_params)) %>%
+  select(ID, Pop, Treatment, SVL, Clade, model_name,  params) %>%
+  unnest(params)
+
+ggplot() +
+  geom_line(aes(Body_temp, .fitted), d_preds, col = 'blue') +
+  geom_ribbon(aes(Body_temp, ymin = conf_lower, ymax = conf_upper), boot_conf_preds, fill = 'blue', alpha = 0.3) +
+  geom_point(aes(Body_temp, fastest_25cm), pictus_clean, size = 2) +
+  theme_bw(base_size = 12) +
+  labs(x = 'Temperature (ºC)',
+       y = 'Rate') +
+  facet_wrap(~ID)
+
+# stack models and calculate extra params
+d_params <- pivot_longer(d_fits, names_to = 'model_name', values_to = 'fit', c(boatman)) %>%
+  mutate(params = map(fit, calc_params)) %>%
+  select(ID, Treatment, Pop, SVL, Clade, model_name, params) %>%
+  unnest(params)
+
+
+```
+
+
+
+```{r}
+d_fits <- mutate(d_fits, params = map(nls_fit, broom::tidy),
+                 cis = map(bootstrap, function(x){
+                   temp <- confint(x, method = 'bca') %>%
+                     as.data.frame() %>%
+                     rename(conf_lower = 1, conf_upper = 2) %>%
+                     rownames_to_column(., var = 'term')
+                   return(temp)
+                   }))
+
+# join parameter and confidence intervals in the same dataset 
+left_join(select(d_fits, ID, Pop, Treatment, Clade, params) %>% unnest(params),
+          select(d_fits, ID, Pop, Treatment, Clade, cis) %>% unnest(cis)) %>%
+  ggplot(., aes(ID, estimate)) +
+  geom_point(size = 4) +
+  geom_linerange(aes(ymin = conf_lower, ymax = conf_upper)) +
+  theme_bw() +
+  facet_wrap(~term, scales = 'free')
+```
+
+
+
+
+
+
+
+## 0.25 M MOdels
+
+
+```{r}
+library(ggpubr)
+library(emmeans)
+##Topt Models
+# Optimal temperature appears much lower than i would anticipate, 31.5?
+
+ggdensity(d_params$topt) # looks ok, weird bump at the higher end
+ggdensity(log(d_params$topt)) 
+ggdensity(sqrt(d_params$topt))
+
+# Make anova for single term and informative co variate, you might use mass instead?
+topt.no.interaction.term <-aov(topt ~ Treatment + SVL, data=d_params)
+
+# Further this with an interaction 
+topt.interaction.term <-aov(topt ~ Treatment + SVL+ Pop*Treatment, data=d_params)
+
+# Pop not sifnificant, look at clade 
+
+topt.new.interaction.term <-aov(topt ~ Treatment + SVL+ Clade*Treatment, data=d_params)
+
+# Assess the AIC
+AIC(topt.no.interaction.term) #346.3672
+AIC(topt.interaction.term) # 352.6047
+AIC(topt.new.interaction.term) #350
+
+# No interaction model has lower AIC, neither are significant 
+
+
+plot(topt.no.interaction.term)
+
+anova(topt.no.interaction.term)
+anova(topt.interaction.term)
+anova (topt.new.interaction.term)
+
+
+emmeans(topt.no.interaction.term, pairwise ~ Treatment)
+
+
+```
+
+
+```{r}
+#Rmax Models 
+# Maximal rate of modelled process, 
+
+ggdensity(d_params$rmax) 
+ggdensity(log(d_params$rmax)) # reasonably normally distributed
+ggdensity(sqrt(d_params$rmax))
+
+
+
+
+library(emmeans)
+library(lmtest)
+
+rmax.no.interaction.term <-aov(rmax ~ Treatment + SVL, data=d_params)
+rmax.interaction.term <-aov(rmax ~ Treatment + SVL+ Pop*Treatment, data=d_params)
+rmax.new.interaction.term <-aov(rmax ~ Treatment + SVL+ Clade*Treatment, data=d_params)
+
+# Assess the AIC
+AIC(rmax.no.interaction.term) #-21.28
+AIC(rmax.interaction.term) # -19.34
+AIC (rmax.new.interaction.term) #-17.988
+
+# Interaction term has lower AIC and significant for SVl but not the interaction of Pop*treatment 
+
+plot(rmax.interaction.term)
+
+
+anova(rmax.no.interaction.term)
+
+bptest(rmax.no.interaction.term)
+
+emmeans(rmax.no.interaction.term,  pairwise ~Treatment)
+```
+
+
+```{r}
+# P80 Models 
+# Breadth of tpc analysis 
+
+ggdensity(d_params$breadth) # all suffer from skew to the right
+ggdensity(sqrt(d_params$breadth))
+ggdensity(log(d_params$breadth))
+
+
+
+
+p80.no.interaction.term <-aov(breadth ~ Treatment + SVL, data=d_params)
+p80.interaction.term <-aov(breadth ~Treatment + SVL+ Pop*Treatment, data=d_params)
+p80.new.interaction.term <-aov(breadth ~Treatment + SVL+ Clade*Treatment, data=d_params)
+
+
+
+AIC(p80.no.interaction.term) #281.2824
+AIC(p80.interaction.term) # 287.71
+AIC(p80.new.interaction.term) #284.77
+
+# No interaction term has lower AIC and significant for SVl but not the interaction of Pop*treatment 
+
+plot(p80.interaction.term)
+
+anova(p80.no.interaction.term)
+
+emmeans(p80.no.interaction.term,  pairwise ~Treatment)
+
+```
+
+
+
+
+
+
+
+
+## 1 M MOdels
+
+
+```{r}
+library(ggpubr)
+##Topt Models
+# Optimal temperature appears much lower than i would anticipate, 31.5?
+
+ggdensity(fastestonem_params$topt) # looks ok, weird bump at the higher end
+ggdensity(log(fastestonem_params$topt)) 
+ggdensity(sqrt(fastestonem_params$topt))
+
+# Make anova for single term and informative co variate, you might use mass instead?
+topt.no.interaction.term <-aov(topt ~ Treatment + SVL, data=fastestonem_params)
+
+# Further this with an interaction 
+topt.interaction.term <-aov(topt ~ Pop*Treatment, data=fastestonem_params)
+
+# Pop not sifnificant, look at clade 
+
+topt.new.interaction.term <-aov(topt ~ Treatment + SVL+ Clade*Treatment, data=fastestonem_params)
+
+# Assess the AIC
+AIC(topt.no.interaction.term) #364.6271
+AIC(topt.interaction.term) # 371.74
+AIC(topt.new.interaction.term) #368.544
+
+# No interaction model has lower AIC, neither are significant
+
+anova(topt.no.interaction.term)
+anova(topt.interaction.term)
+anova (topt.new.interaction.term)
+
+
+emmeans(topt.no.interaction.term, pairwise ~ Treatment)
+
+
+```
+
+
+```{r}
+Toptgraph <- ggplot(fastestonem_params, aes(x = Pop, y = topt, colour = interaction(Pop, Treatment), fill = interaction(Pop, Treatment))) + 
+  geom_boxplot(outlier.shape = NA, colour = "black", alpha = 1) + 
+  geom_point(position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.75), size = 1, alpha = 0.5, colour = "black") + 
+    scale_fill_manual(
+    values = c(
+      "KNGA.Warm" = "#fa9952", "KNGA.Cool" = "#84d1e5",
+      "NGKT.Warm" = "#fa9952", "NGKT.Cool" = "#84d1e5",
+      "MR.Warm" = "#fa9952", "MR.Cool" = "#84d1e5",
+      "STURT.Warm" = "#fa9952", "STURT.Cool" = "#84d1e5")) +
+  scale_colour_manual(
+    values = c(
+     "KNGA.Warm" = "#fa9952", "KNGA.Cool" = "#84d1e5",
+      "NGKT.Warm" = "#fa9952", "NGKT.Cool" = "#84d1e5",
+      "MR.Warm" = "#fa9952", "MR.Cool" = "#84d1e5",
+      "STURT.Warm" = "#fa9952", "STURT.Cool" = "#84d1e5")) +  # Customize point colors for all combinations
+  scale_x_discrete(labels = c("KNGA" = "Kinchega NP", "MR" = "Muloorina Station", "NGKT" = "Ngarkat", "STURT" = "Sturt NP")) +
+  labs(x = "", y = "Topt (\u00B0C)") +
+
+  
+  theme_classic() +
+  ylim(30, 42.7) +
+  theme(legend.position = "none")
+
+Toptgraph
+
+```
+
+```{r}
+ggsave("~/Desktop/phd/Documents/Chapter_1_Honours/Tissue_plots.tiff", Toptgraph, width = 7.5, height = 4, dpi = 300)
+```
+
+
+```{r}
+#Rmax Models 
+# Maximal rate of modelled process, 
+
+ggdensity(fastestonem_params$rmax) # reasonably normally distributed
+ggdensity(log(fastestonem_params$rmax)) 
+ggdensity(sqrt(fastestonem_params$rmax))
+
+library(emmeans)
+library(lmtest)
+
+rmax.no.interaction.term <-aov(rmax ~ Treatment + SVL, data=fastestonem_params)
+rmax.interaction.term <-aov(rmax ~ Treatment + SVL+ Pop*Treatment, data=fastestonem_params)
+rmax.new.interaction.term <-aov(rmax ~ Treatment + SVL+ Clade*Treatment, data=fastestonem_params)
+
+# Assess the AIC
+AIC(rmax.no.interaction.term) # 62.181
+AIC(rmax.interaction.term) # 66/167
+AIC (rmax.new.interaction.term) #64.160
+
+# Interaction term has lower AIC and significant for SVl but not the interaction of Pop*treatment 
+
+plot(rmax.interaction.term)
+
+
+anova(rmax.interaction.term)
+
+bptest(rmax.no.interaction.term)
+
+emmeans(rmax.interaction.term, ~ Treatment)
+```
+```{r}
+Rmaxgraph <- ggplot(fastestonem_params, aes(x = Pop, y = rmax, colour = interaction(Pop, Treatment), fill = interaction(Pop, Treatment))) + 
+  geom_boxplot(outlier.shape = NA, colour = "black", alpha = 1) + 
+  geom_point(position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.75), size = 1, alpha = 0.5, colour = "black") + 
+    scale_fill_manual(
+    values = c(
+      "KNGA.Warm" = "#fa9952", "KNGA.Cool" = "#84d1e5",
+      "NGKT.Warm" = "#fa9952", "NGKT.Cool" = "#84d1e5",
+      "MR.Warm" = "#fa9952", "MR.Cool" = "#84d1e5",
+      "STURT.Warm" = "#fa9952", "STURT.Cool" = "#84d1e5")) +
+  scale_colour_manual(
+    values = c(
+     "KNGA.Warm" = "#fa9952", "KNGA.Cool" = "#84d1e5",
+      "NGKT.Warm" = "#fa9952", "NGKT.Cool" = "#84d1e5",
+      "MR.Warm" = "#fa9952", "MR.Cool" = "#84d1e5",
+      "STURT.Warm" = "#fa9952", "STURT.Cool" = "#84d1e5")) +  # Customize point colors for all combinations
+  scale_x_discrete(labels = c("KNGA" = "Kinchega NP", "MR" = "Muloorina Station", "NGKT" = "Ngarkat", "STURT" = "Sturt NP")) +
+  labs(x = "", y = "Rmax m/s") +
+
+  
+  theme_classic() +
+  #ylim(30, 42.7) +
+  theme(legend.position = "none")
+
+Rmaxgraph
+
+```
+```{r}
+ggsave("~/Desktop/phd/Documents/Chapter_1_Honours/Tissue_plots.tiff", Toptgraph, width = 7.5, height = 4, dpi = 300)
+```
+
+
+```{r}
+# P80 Models 
+# Breadth of tpc analysis 
+
+ggdensity(fastestonem_params$breadth) # all suffer from skew to the right
+ggdensity(sqrt(fastestonem_params$breadth))
+ggdensity(log(fastestonem_params$breadth))
+
+
+
+
+p80.no.interaction.term <-aov(breadth ~ Treatment , data=fastestonem_params)
+p80.interaction.term <-aov(breadth ~Treatment +Pop*Treatment, data=fastestonem_params)
+p80.new.interaction.term <-aov(breadth ~Treatment + Clade*Treatment, data=fastestonem_params)
+
+
+
+AIC(p80.no.interaction.term) #396.10
+AIC(p80.interaction.term) # 404.37
+AIC(p80.new.interaction.term) #399.98
+
+# No interaction term has lower AIC and significant for SVl but not the interaction of Pop*treatment 
+
+plot(p80.interaction.term)
+
+anova(p80.interaction.term)
+
+
+```
+```{r}
+Breadthgraph <- ggplot(fastestonem_params, aes(x = Pop, y = breadth, colour = interaction(Pop, Treatment), fill = interaction(Pop, Treatment))) + 
+  geom_boxplot(outlier.shape = NA, colour = "black", alpha = 1) + 
+  geom_point(position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.75), size = 1, alpha = 0.5, colour = "black") + 
+    scale_fill_manual(
+    values = c(
+      "KNGA.Warm" = "#fa9952", "KNGA.Cool" = "#84d1e5",
+      "NGKT.Warm" = "#fa9952", "NGKT.Cool" = "#84d1e5",
+      "MR.Warm" = "#fa9952", "MR.Cool" = "#84d1e5",
+      "STURT.Warm" = "#fa9952", "STURT.Cool" = "#84d1e5")) +
+  scale_colour_manual(
+    values = c(
+     "KNGA.Warm" = "#fa9952", "KNGA.Cool" = "#84d1e5",
+      "NGKT.Warm" = "#fa9952", "NGKT.Cool" = "#84d1e5",
+      "MR.Warm" = "#fa9952", "MR.Cool" = "#84d1e5",
+      "STURT.Warm" = "#fa9952", "STURT.Cool" = "#84d1e5")) +  # Customize point colors for all combinations
+  scale_x_discrete(labels = c("KNGA" = "Kinchega NP", "MR" = "Muloorina Station", "NGKT" = "Ngarkat", "STURT" = "Sturt NP")) +
+  labs(x = "", y = "P80 (\u00B0C)") +
+
+  
+  theme_classic() +
+  #ylim(30, 42.7) +
+  theme(legend.position = "none")
+
+Breadthgraph
+
+```
+
+
+
+
+
+```{r}
+ggsave("~/Desktop/phd/Documents/Chapter_1_Honours/Tissue_plots.tiff", Breadthgraph, width = 7.5, height = 4, dpi = 300)
+```
+
+
+
+
+```{r}
+## IMPORT DATA
+pictus_CTMAX <- read_csv("~/Desktop/phd/Documents/Chapter 3/Datasheets/CTmax_DR_2024.csv")
+pictus_CTMAX$Treatment <- as.factor(pictus_CTMAX$Treatment)
+pictus_CTMAX$Pop <- as.factor(pictus_CTMAX$Pop)
+pictus_CTMAX$Pop <- factor(pictus_CTMAX$Pop, levels = c("STURT", "MR", "KNGA", "NRKT"))
+pictus_CTMAX$Treatment <- factor(pictus_CTMAX$Treatment, levels = c("Warm", "Cool"))
+```
+
+
+
+
+```{r}
+str(pictus_CTMAX)
+```
+
+
+
+```{r}
+Tgapegraph <- ggplot(pictus_CTMAX, aes(x = Pop, y = Tgape, colour = interaction(Pop, Treatment), fill = interaction(Pop, Treatment))) +
+  geom_boxplot(outlier.shape = NA, colour = "black", alpha = 1) +  # Prevent overlap with default boxplot outliers
+  geom_point(position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.75), size =1, alpha = 0.5, colour ="black") +  # Add jittered points
+  scale_fill_manual(
+    values = c(
+      "KNGA.Warm" = "#fa9952", "KNGA.Cool" = "#84d1e5",
+      "NRKT.Warm" = "#fa9952", "NRKT.Cool" = "#84d1e5",
+      "MR.Warm" = "#fa9952", "MR.Cool" = "#84d1e5",
+      "STURT.Warm" = "#fa9952", "STURT.Cool" = "#84d1e5")) +
+  scale_colour_manual(
+    values = c(
+     "KNGA.Warm" = "#fa9952", "KNGA.Cool" = "#84d1e5",
+      "NRKT.Warm" = "#fa9952", "NRKT.Cool" = "#84d1e5",
+      "MR.Warm" = "#fa9952", "MR.Cool" = "#84d1e5",
+      "STURT.Warm" = "#fa9952", "STURT.Cool" = "#84d1e5")) +  # Customize point colors for all combinations
+  scale_x_discrete(labels = c("KNGA" = "Kinchega NP", "MR" = "Muloorina Station", "NRKT" = "Ngarkat", "STURT" = "Sturt NP")) +  # Change x-axis labels
+  labs(x = "", y = "Tgape (\u00B0C)") +
+  geom_signif(
+    comparisons = list(c("KNGA", "STURT")),  # Specify the populations for comparison
+    map_signif_level = TRUE,             # Automatically map p-values to significance levels
+    test = "t.test", colour="Black",
+    size = 1.2,
+    textsize = 6 # Use a t-test for comparison
+  ) +
+  theme_classic()+
+   ylim(41, 45.5) +
+theme(legend.position = "none") 
+
+Tgapegraph 
+```
+
+
+```{r}
+Tgapegraph <- ggplot(pictus_CTMAX, aes(x = Pop, y = Tgape, colour = interaction(Pop, Treatment), fill = interaction(Pop, Treatment))) +
+  geom_boxplot(outlier.shape = NA, colour = "black", alpha = 1) +  # Prevent overlap with default boxplot outliers
+  geom_point(position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.75), size =1, alpha = 0.5, colour ="black") +  # Add jittered points
+  # Customize fill and color scales
+  scale_fill_manual(
+    values = c(
+      "KNGA.Warm" = "#fa9952", "KNGA.Cool" = "#84d1e5",
+      "NRKT.Warm" = "#fa9952", "NRKT.Cool" = "#84d1e5",
+      "MR.Warm" = "#fa9952", "MR.Cool" = "#84d1e5",
+      "STURT.Warm" = "#fa9952", "STURT.Cool" = "#84d1e5"
+    )
+  ) +
+  scale_colour_manual(
+    values = c(
+      "KNGA.Warm" = "#fa9952", "KNGA.Cool" = "#84d1e5",
+      "NRKT.Warm" = "#fa9952", "NRKT.Cool" = "#84d1e5",
+      "MR.Warm" = "#fa9952", "MR.Cool" = "#84d1e5",
+      "STURT.Warm" = "#fa9952", "STURT.Cool" = "#84d1e5"
+    )
+  ) +
+  # Customize x-axis labels
+  scale_x_discrete(labels = c("KNGA" = "Kinchega NP", "MR" = "Muloorina Station", "NRKT" = "Ngarkat", "STURT" = "Sturt NP")) +
+  labs(x = "", y = "Tgape (\u00B0C)") +
+  # Add significance comparisons
+  geom_signif(
+    comparisons = list(c("KNGA", "STURT")),  # Specify the populations for comparison
+    map_signif_level = TRUE,                 # Automatically map p-values to significance levels
+    test = "t.test",                         # Use a t-test for comparison
+    colour = "Black",
+    size = 1.2,
+    textsize = 6
+  ) +
+  theme_classic() +
+  ylim(41, 45.5) +
+  theme(legend.position = "none")
+
+Tgapegraph
+```
+
+
+
+```{r}
+model <- aovp(Ctmin ~Treatment*Clade , data =pictus_CTMAX)
+
+summary(model)
+```
+
+
+
+```{r}
+library(ggpubr)
+# Tgape Models 
+
+ggdensity(pictus_CTMAX$Tgape) # all suffer from skew to the right
+ggdensity(sqrt(pictus_CTMAX$Tgape))
+ggdensity(log(pictus_CTMAX$Tgape))
+
+
+
+
+p80.no.interaction.term <-aov(Tgape ~ Treatment , data=pictus_CTMAX)
+p80.no.interaction.term.two <-aov(Tgape ~ Pop , data=pictus_CTMAX)
+p80.interaction.term <-aov(Tgape ~Treatment+ Pop*Treatment, data=pictus_CTMAX)
+p80.new.interaction.term <-aov(Tgape ~Treatment + Clade*Treatment, data=pictus_CTMAX)
+
+
+
+AIC(p80.no.interaction.term) #216
+AIC(p80.no.interaction.term.two) #207.96
+AIC(p80.interaction.term) # 209
+AIC(p80.new.interaction.term) #214
+
+# No interaction term has lower AIC and significant for SVl but not the interaction of Pop*treatment 
+
+plot(p80.interaction.term)
+
+anova(p80.no.interaction.term.two)
+emmeans(p80.no.interaction.term.two-, pairwise ~ Pop)
+
+```
+
+
+
+
+
+```{r}
+Vtmaxgraph <- ggplot(pictus_CTMAX, aes(x = Pop, y = Vtmax, colour = interaction(Pop, Treatment), fill = interaction(Pop, Treatment))) +
+  geom_boxplot(outlier.shape = NA, colour = "black", alpha = 1) +  # Prevent overlap with default boxplot outliers
+  geom_point(position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.75), size =1, alpha = 0.5, colour ="black") +  # Add jittered points
+  scale_fill_manual(
+    values = c(
+      "KNGA.Warm" = "#fa9952", "KNGA.Cool" = "#84d1e5",
+      "NRKT.Warm" = "#fa9952", "NRKT.Cool" = "#84d1e5",
+      "MR.Warm" = "#fa9952", "MR.Cool" = "#84d1e5",
+      "STURT.Warm" = "#fa9952", "STURT.Cool" = "#84d1e5")) +
+  scale_colour_manual(
+    values = c(
+     "KNGA.Warm" = "#fa9952", "KNGA.Cool" = "#84d1e5",
+      "NRKT.Warm" = "#fa9952", "NRKT.Cool" = "#84d1e5",
+      "MR.Warm" = "#fa9952", "MR.Cool" = "#84d1e5",
+      "STURT.Warm" = "#fa9952", "STURT.Cool" = "#84d1e5")) +  # Customize point colors for all combinations
+  scale_x_discrete(labels = c("KNGA" = "Kinchega NP", "MR" = "Muloorina Station", "NRKT" = "Ngarkat", "STURT" = "Sturt NP")) +  # Change x-axis labels
+  labs(x = "", y = "VTmax (\u00B0C)") +
+  geom_signif(
+    comparisons = list(c("MR", "STURT")),  # Specify the populations for comparison
+    map_signif_level = TRUE,             # Automatically map p-values to significance levels
+    test = "t.test", colour="Black"  ,  y_position = (43.5)   
+    ,
+    size = 1.2,
+    textsize = 6# Use a t-test for comparison
+  ) +
+     
+  geom_signif(
+    comparisons = list(c("NRKT", "STURT")),  # Specify the populations for comparison
+    map_signif_level = TRUE,             # Automatically map p-values to significance levels
+    test = "t.test", colour="Black" ,    y_position = (44.5) ,
+    size = 1.2,
+    textsize = 6                 # Use a t-test for comparison
+  ) +
+ geom_signif(
+    comparisons = list(c("KNGA", "STURT")),  # Specify the populations for comparison
+    map_signif_level = TRUE,             # Automatically map p-values to significance levels
+    test = "t.test", colour="Black"     ,    y_position = (45.5)    ,
+    size = 1.2,
+    textsize = 6
+    # Use a t-test for comparison
+  ) +
+  theme_classic()+
+
+  ylim(35.7, 47) +
+theme(legend.position = "none") 
+
+
+Vtmaxgraph
+```
+
+```{r}
+# Vtmax Models 
+
+ggdensity(pictus_CTMAX$Vtmax) # all suffer from skew to the right
+ggdensity(sqrt(pictus_CTMAX$Vtmax))
+ggdensity(log(pictus_CTMAX$Vtmax))
+
+
+
+
+p80.no.interaction.term <-aov(Vtmax ~ Treatment , data=pictus_CTMAX)
+p80.no.interaction.term.two <-aov(Vtmax ~ Pop , data=pictus_CTMAX)
+p80.interaction.term <-aov(Vtmax ~Treatment+ Pop*Treatment, data=pictus_CTMAX)
+p80.new.interaction.term <-aov(Vtmax ~Treatment + Clade*Treatment, data=pictus_CTMAX)
+
+
+
+AIC(p80.no.interaction.term) #216
+AIC(p80.no.interaction.term.two) #323.92
+AIC(p80.interaction.term) # 209
+AIC(p80.new.interaction.term) #214
+
+# No interaction term has lower AIC and significant for SVl but not the interaction of Pop*treatment 
+
+plot(p80.interaction.term)
+
+anova(p80.no.interaction.term.two)
+
+emmeans(p80.no.interaction.term.two,  pairwise ~ Pop)
+```
+
+
+
+
+
+
+```{r}
+CTmingraph <- ggplot(pictus_CTMAX, aes(x = Pop, y = Ctmin, colour = interaction(Pop, Treatment), fill = interaction(Pop, Treatment))) +
+  geom_boxplot(outlier.shape = NA, colour = "black", alpha = 1) +  # Prevent overlap with default boxplot outliers
+  geom_point(position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.75), size =1, alpha = 0.5, colour ="black") +  # Add jittered points
+  scale_fill_manual(
+    values = c(
+      "KNGA.Warm" = "#fa9952", "KNGA.Cool" = "#84d1e5",
+      "NRKT.Warm" = "#fa9952", "NRKT.Cool" = "#84d1e5",
+      "MR.Warm" = "#fa9952", "MR.Cool" = "#84d1e5",
+      "STURT.Warm" = "#fa9952", "STURT.Cool" = "#84d1e5")) +
+  scale_colour_manual(
+    values = c(
+     "KNGA.Warm" = "#fa9952", "KNGA.Cool" = "#84d1e5",
+      "NRKT.Warm" = "#fa9952", "NRKT.Cool" = "#84d1e5",
+      "MR.Warm" = "#fa9952", "MR.Cool" = "#84d1e5",
+      "STURT.Warm" = "#fa9952", "STURT.Cool" = "#84d1e5")) +  # Customize point colors for all combinations
+  scale_x_discrete(labels = c("KNGA" = "Kinchega NP", "MR" = "Muloorina Station", "NRKT" = "Ngarkat", "STURT" = "Sturt NP")) +  # Change x-axis labels
+  labs(x = "", y = "CTmin (\u00B0C)") +
+ geom_segment(
+    aes(x = 1.5, xend = 3.5, y = 12, yend = 12),  # Adjust x, xend, y, yend for position
+    color = "black", size = 1
+  ) +
+  geom_segment(
+    aes(x = 1.5, xend = 1.5, y = 12 - 0.2, yend = 12 ),  # Adjust y for tick length
+    color = "black", size = 1
+  ) +
+  # Right perpendicular tick
+  geom_segment(
+    aes(x = 3.5, xend = 3.5, y = 12 - 0.2, yend = 12),  # Adjust y for tick length
+    color = "black", size = 1
+  ) +
+  annotate("text", x = 2.5, y = 12.5, label = "*", size = 6, color = "black") + 
+  theme_classic()+
+theme(legend.position = "none") 
+
+CTmingraph
+```
+
+
+```{r}
+# Vtmax Models 
+
+ggdensity(pictus_CTMAX$Ctmin) # all suffer from skew to the right
+ggdensity(sqrt(pictus_CTMAX$Ctmin))
+ggdensity(log(pictus_CTMAX$Ctmin))
+
+
+
+
+Ctmin.no.interaction.term <-aov(Ctmin ~ Treatment , data=pictus_CTMAX)
+Ctmin.no.interaction.term.two <-aov(Ctmin ~ Pop , data=pictus_CTMAX)
+Ctmin.interaction.term <-aov(Ctmin ~Treatment+ Pop*Treatment, data=pictus_CTMAX)
+Ctmin.new.interaction.term <-aov(Ctmin ~Treatment + Clade*Treatment, data=pictus_CTMAX)
+
+
+
+AIC(Ctmin.no.interaction.term) #269
+AIC(Ctmin.no.interaction.term.two)#267.73
+AIC(Ctmin.interaction.term) # 271
+AIC(Ctmin.new.interaction.term) #268
+
+# No interaction term has lower AIC and significant for SVl but not the interaction of Pop*treatment 
+
+plot(Ctmin.no.interaction.term)
+
+anova(Ctmin.no.interaction.term.two)
+
+emmeans(Ctmin.new.interaction.term,  pairwise ~ Clade)
+```
+
+
+
+```{r}
+str(d_params)
+```
+
+
+
+```{r}
+
+d_params$Pop <- factor(d_params$Pop, levels = c("STURT", "MR", "KNGA", "NGKT"))
+d_params$Treatment <- factor(d_params$Treatment, levels = c("Warm", "Cool"))
+```
+
+
+```{r}
+Toptgraph <- ggplot(d_params, aes(x = Pop, y = topt, colour = interaction(Pop, Treatment), fill = interaction(Pop, Treatment))) + 
+  geom_boxplot(outlier.shape = NA, colour = "black", alpha = 1) + 
+  geom_point(position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.75), size = 1, alpha = 0.5, colour = "black") + 
+    scale_fill_manual(
+    values = c(
+      "KNGA.Warm" = "#fa9952", "KNGA.Cool" = "#84d1e5",
+      "NGKT.Warm" = "#fa9952", "NGKT.Cool" = "#84d1e5",
+      "MR.Warm" = "#fa9952", "MR.Cool" = "#84d1e5",
+      "STURT.Warm" = "#fa9952", "STURT.Cool" = "#84d1e5")) +
+  scale_colour_manual(
+    values = c(
+     "KNGA.Warm" = "#fa9952", "KNGA.Cool" = "#84d1e5",
+      "NGKT.Warm" = "#fa9952", "NGKT.Cool" = "#84d1e5",
+      "MR.Warm" = "#fa9952", "MR.Cool" = "#84d1e5",
+      "STURT.Warm" = "#fa9952", "STURT.Cool" = "#84d1e5")) +  # Customize point colors for all combinations
+  scale_x_discrete(labels = c("KNGA" = "Kinchega NP", "MR" = "Muloorina Station", "NGKT" = "Ngarkat", "STURT" = "Sturt NP")) +
+  labs(x = "", y = "Topt (\u00B0C)") +
+
+  geom_segment(
+    aes(x = 0.75, xend = 1.25, y = 42, yend = 42),  # Adjust x, xend, y, yend for position
+    color = "black", size = 1) +
+  geom_segment(
+    aes(x = 0.75, xend = 0.75, y = 42 - 0.2, yend = 42 ),  # Adjust y for tick length
+    color = "black", size = 1
+  ) +
+  geom_segment(
+    aes(x = 1.25, xend = 1.25, y = 42 - 0.2, yend = 42),  # Adjust y for tick length
+    color = "black", size = 1
+  ) +
+  annotate("text", x =1, y = 42.5, label = "*", size = 6, color = "black") + 
+  
+  geom_segment(
+    aes(x = 1.75, xend = 2.25, y = 42, yend = 42),  # Adjust x, xend, y, yend for position
+    color = "black", size = 1) +
+  geom_segment(
+    aes(x = 1.75, xend = 1.75, y = 42 - 0.2, yend = 42 ),  # Adjust y for tick length
+    color = "black", size = 1
+  ) +
+  geom_segment(
+    aes(x = 2.25, xend = 2.25, y = 42 - 0.2, yend = 42),  # Adjust y for tick length
+    color = "black", size = 1
+  ) +
+  annotate("text", x =2, y = 42.5, label = "*", size = 6, color = "black") + 
+  
+  
+  geom_segment(
+    aes(x = 2.75, xend = 3.25, y = 42, yend = 42),  # Adjust x, xend, y, yend for position
+    color = "black", size = 1) +
+  geom_segment(
+    aes(x = 2.75, xend = 2.75, y = 42 - 0.2, yend = 42 ),  # Adjust y for tick length
+    color = "black", size = 1
+  ) +
+  geom_segment(
+    aes(x = 3.25, xend = 3.25, y = 42 - 0.2, yend = 42),  # Adjust y for tick length
+    color = "black", size = 1
+  ) +
+  annotate("text", x =3,  y = 42.5, label = "*", size = 6, color = "black") + 
+  geom_segment(
+    aes(x = 3.75, xend = 4.25, y = 42, yend = 42),  # Adjust x, xend, y, yend for position
+    color = "black", size = 1) +
+  geom_segment(
+    aes(x = 3.75, xend = 3.75, y = 42 - 0.2, yend = 42 ),  # Adjust y for tick length
+    color = "black", size = 1
+  ) +
+  geom_segment(
+    aes(x = 4.25, xend = 4.25, y = 42 - 0.2, yend = 42),  # Adjust y for tick length
+    color = "black", size = 1
+  ) +
+  annotate("text", x =4,  y = 42.5, label = "*", size = 6, color = "black") + 
+  
+  
+  theme_classic() +
+  ylim(30, 42.7) +
+  theme(legend.position = "none")
+
+Toptgraph
+
+```
+```{r}
+# Ensure the correct order of factors for interaction(Pop, Treatment)
+d_params <- d_params %>%
+  mutate(
+    Pop = factor(Pop, levels = c("STURT", "MR", "KNGA", "NGKT")),  # Set population order
+    Treatment = factor(Treatment, levels = c("Cool", "Warm")),     # Set treatment order
+    Group = interaction(Pop, Treatment, sep = ".")                 # Create interaction column
+  )
+
+# Reorder the Group factor levels to match the desired order
+d_params$Group <- factor(d_params$Group, levels = c(
+  "STURT.Warm","STURT.Cool", 
+  "MR.Warm","MR.Cool", 
+   "KNGA.Warm","KNGA.Cool",
+  "NGKT.Warm","NGKT.Cool"
+))
+```
+
+
+
+
+
+
+```{r}
+library(ggpubr)
+##Topt Models
+# Optimal temperature appears much lower than i would anticipate, 31.5?
+
+ggdensity(d_params$topt) # looks ok, weird bump at the higher end
+ggdensity(log(d_params$topt)) 
+ggdensity(sqrt(d_params$topt))
+
+# Make anova for single term and informative co variate, you might use mass instead?
+topt.no.interaction.term <-aov(topt ~ Treatment , data=d_params)
+
+# Further this with an interaction 
+topt.interaction.term <-aov(topt ~ Treatment + Pop*Treatment, data=d_params)
+
+# Pop not sifnificant, look at clade 
+
+topt.new.interaction.term <-aov(topt ~ Treatment + Clade*Treatment, data=d_params)
+
+# Assess the AIC
+AIC(topt.no.interaction.term) #346.3672
+AIC(topt.interaction.term) # 352.6047
+AIC(topt.new.interaction.term) #350
+
+# No interaction model has lower AIC, neither are significant 
+
+
+plot(topt.interaction.term)
+
+anova(topt.no.interaction.term)
+
+
+
+emmeans(topt.no.interaction.term,pairwise~ Treatment)
+
+
+```
+
+
+
+
+
+```{r}
+RMAXgraph <- ggplot(d_params, aes(x = Pop, y = rmax, colour = interaction(Pop, Treatment), fill = interaction(Pop, Treatment))) +
+  geom_boxplot(outlier.shape = NA, colour = "black", alpha = 1) +  # Prevent overlap with default boxplot outliers
+  geom_point(position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.75), size =1, alpha = 0.5, colour ="black") +  # Add jittered points
+ scale_fill_manual(
+    values = c(
+      "KNGA.Warm" = "#fa9952", "KNGA.Cool" = "#84d1e5",
+      "NGKT.Warm" = "#fa9952", "NGKT.Cool" = "#84d1e5",
+      "MR.Warm" = "#fa9952", "MR.Cool" = "#84d1e5",
+      "STURT.Warm" = "#fa9952", "STURT.Cool" = "#84d1e5")) +
+  scale_colour_manual(
+    values = c(
+     "KNGA.Warm" = "#fa9952", "KNGA.Cool" = "#84d1e5",
+      "NGKT.Warm" = "#fa9952", "NGKT.Cool" = "#84d1e5",
+      "MR.Warm" = "#fa9952", "MR.Cool" = "#84d1e5",
+      "STURT.Warm" = "#fa9952", "STURT.Cool" = "#84d1e5")) +  # Customize point colors for all combinations
+  scale_x_discrete(labels = c("KNGA" = "Kinchega NP", "MR" = "Muloorina Station", "NGKT" = "Ngarkat", "STURT" = "Sturt NP")) +  # Change x-axis labels
+  labs(x = "", y = "Rmax (m/s)") +
+  geom_signif(
+    comparisons = list(c("MR", "STURT")),  # Specify the populations for comparison
+    map_signif_level = TRUE,             # Automatically map p-values to significance levels
+    test = "t.test", colour="Black"  ,   y_position = (3.95)     ,
+    size = 1.2,
+    textsize = 6                # Use a t-test for comparison
+  ) +
+    geom_signif(
+    comparisons = list(c("NGKT", "STURT")),  # Specify the populations for comparison
+    map_signif_level = TRUE,             # Automatically map p-values to significance levels
+    test = "t.test", colour="Black"      ,   y_position = (4.20)   ,
+    size = 1.2,
+    textsize = 6              # Use a t-test for comparison
+  ) +
+  geom_signif(
+    comparisons = list(c("KNGA", "STURT")),  # Specify the populations for comparison
+    map_signif_level = TRUE,             # Automatically map p-values to significance levels
+    test = "t.test", colour="Black"     ,   y_position = (4.45)    ,
+    size = 1.2,
+    textsize = 6                # Use a t-test for comparison
+  ) +
+  theme_classic()+
+  ylim(1.5, 4.8) +
+theme(legend.position = "none") 
+
+RMAXgraph
+```
+
+
+```{r}
+#Rmax Models 
+# Maximal rate of modelled process, 
+
+ggdensity(d_params$rmax) 
+ggdensity(log(d_params$rmax)) # reasonably normally distributed
+ggdensity(sqrt(d_params$rmax))
+
+
+
+
+library(emmeans)
+library(lmtest)
+
+rmax.no.interaction.term <-aov(rmax ~ Treatment+ SVL, data=d_params)
+rmax.interaction.term <-aov(rmax ~ Treatment+ SVL+ Pop*Treatment, data=d_params)
+rmax.new.interaction.term <-aov(rmax ~ Treatment + SVL + Clade*Treatment, data=d_params)
+
+# Assess the AIC
+AIC(rmax.no.interaction.term) #-7.5
+AIC(rmax.interaction.term) # -17.09
+AIC (rmax.new.interaction.term) #-9.599
+
+# Interaction term has lower AIC and significant for SVl but not the interaction of Pop*treatment 
+
+plot(rmax.interaction.term)
+
+
+anova(rmax.no.interaction.term)
+
+
+emmeans(rmax.no.interaction.term, pairwise~ Treatment)
+```
+
+
+```{r}
+MTG_MTG <- ggplot(pictus_ADULT_TELO, aes(x = MTG_Z_JAN, y = MTG_Z_MAY)) +
+    geom_point() +
+    geom_smooth(method = "lm", se = FALSE, colour="Black") +  
+    labs(title = "(f)") +
+  xlab("MTG_JAN (Z Score)")+
+  ylab("MTG_MAY (Z Score)")+
+#xlim(0,6)+ 
+ # ylim(0,4)+
+    theme_classic()
+MTG_MTG
+```
+
+
+
+
+
+
+```{r}
+breadthgraph <- ggplot(d_params, aes(x = Pop, y = breadth, colour = interaction(Pop, Treatment), fill = interaction(Pop, Treatment))) +
+  geom_boxplot(outlier.shape = NA, colour = "black", alpha = 1) +  # Prevent overlap with default boxplot outliers
+  geom_point(position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.75), size =1, alpha = 0.5, colour ="black") +  # Add jittered points
+  scale_fill_manual(
+    values = c(
+      "KNGA.Warm" = "#fa9952", "KNGA.Cool" = "#84d1e5",
+      "NGKT.Warm" = "#fa9952", "NGKT.Cool" = "#84d1e5",
+      "MR.Warm" = "#fa9952", "MR.Cool" = "#84d1e5",
+      "STURT.Warm" = "#fa9952", "STURT.Cool" = "#84d1e5")) +
+  scale_colour_manual(
+    values = c(
+     "KNGA.Warm" = "#fa9952", "KNGA.Cool" = "#84d1e5",
+      "NGKT.Warm" = "#fa9952", "NGKT.Cool" = "#84d1e5",
+      "MR.Warm" = "#fa9952", "MR.Cool" = "#84d1e5",
+      "STURT.Warm" = "#fa9952", "STURT.Cool" = "#84d1e5")) +  # Customize point colors for all combinations
+  scale_x_discrete(labels = c("KNGA" = "Kinchega NP", "MR" = "Muloorina Station", "NGKT" = "Ngarkat", "STURT" = "Sturt NP")) +  # Change x-axis labels
+  labs(x = "", y = "P80 (\u00B0C)") +
+  theme_classic()+
+theme(legend.position = "none") 
+
+breadthgraph
+```
+
+
+
+
+```{r}
+# P80 Models 
+# Breadth of tpc analysis 
+
+ggdensity(d_params$breadth) # all suffer from skew to the right
+ggdensity(sqrt(d_params$breadth))
+ggdensity(log(d_params$breadth))
+
+
+
+
+p80.no.interaction.term <-aov(breadth ~ Treatment , data=d_params)
+p80.interaction.term <-aov(breadth ~Treatment+ Pop*Treatment, data=d_params)
+p80.new.interaction.term <-aov(breadth ~Treatment + Clade*Treatment, data=d_params)
+
+
+
+AIC(p80.no.interaction.term) #321
+AIC(p80.interaction.term) # 327
+AIC(p80.new.interaction.term) #323
+
+# No interaction term has lower AIC and significant for SVl but not the interaction of Pop*treatment 
+
+plot(p80.interaction.term)
+
+anova(p80.interaction.term)
+
+emmeans(p80.no.interaction.term, pairwise~ Treatment)
+```
+
+
+```{r}
+library(gridExtra)
+thermal.figure <- grid.arrange(Tgapegraph , CTmingraph, Vtmaxgraph, Toptgraph, RMAXgraph, breadthgraph, ncol= 2)
+```
+
+
+```{r}
+view(thermal.figure)
+```
+
+
+```{r}
+thermal.figure <- ggpubr::ggarrange( Tgapegraph ,Vtmaxgraph,CTmingraph,Toptgraph, RMAXgraph, breadthgraph,
+                                         ncol = 3, nrow = 2,
+                                         widths = c(10, 10),
+                                         heights = c(10, 10))  +
+  annotate("text", x = c(0.024, 0.35, 0.7, 0.024, 0.35, 0.7), y = c(0.98, 0.98, 0.98,0.55, 0.55, 0.55), label = c("A)", "B)", "C)", "D)", "E)", "F)"),
+           size = 4, fontface = "bold")
+
+thermal.figure 
+
+```
+
+
+
+
+
+```{r}
+# show the data
+ggplot(pictus_CTMAX, aes(Tgape, Vtmax, colour=Pop)) +
+  geom_point() +
+  stat_smooth(method = "lm", level=0.9)+
+  theme_bw(base_size = 12) +
+  labs(x = 'Tgape',
+       y = 'Voluntary Max')
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
