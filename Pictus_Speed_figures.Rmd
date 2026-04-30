@@ -1,0 +1,1218 @@
+---
+title: "SPRINT_SPEED_FIGURES"
+author: "Daniel Ritchie"
+date: "2025-03-10"
+output: html_document
+---
+
+
+```{r}
+
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(lme4)
+library(dplyr)
+library(rptR)
+library(lmPerm)
+library(nls.multstart)
+library(purrr)
+library(rTPC)
+library(broom)
+library(ggrepel)
+```
+
+
+```{r}
+
+## IMPORT DATA
+# Use this data sheet as an example, data should be in a long format
+
+pictus_clean <- read_csv("~/Desktop/phd/Documents/Chapter 3/Datasheets/Sprint_speed_data.csv")
+
+
+
+# Simplify to only necessary variables, turn ID into factor, make sure body_temp and speed are numeric.
+
+### MAKE SURE ALL THESE VARIBLES ARE RECORDED PROPERLY, RTPC WILL NOT WORK IF AN INDIVIDUAL HAS TWO VALUES FOR TREATMENT ETC...
+
+
+pictus_clean$ID <- as.factor(pictus_clean$ID)
+pictus_clean$Clade <- as.factor(pictus_clean$Clade)
+pictus_clean$Pop <- as.factor(pictus_clean$Pop)
+pictus_clean$Treatment <- as.factor(pictus_clean$Treatment)
+pictus_clean$Body_temp <- as.numeric(pictus_clean$Body_temp)
+pictus_clean$fastest_25cm <- as.numeric(pictus_clean$fastest_25cm)
+pictus_clean <- select(pictus_clean, ID, Body_temp, SVL, Pop, Treatment, Clade, fastest_25cm, onem_speed)
+
+```
+
+```{r}
+#reduce dataframe again to simplest form, same as above
+data.rtpc<-pictus_clean %>% 
+  arrange(ID, Body_temp) %>%
+  select(Body_temp, ID, Clade, Treatment, fastest_25cm)
+
+
+# fit chosen model formulation in rTPC
+# Make sure the below code is exactly the same except for changing body temp and fastest_25
+```
+
+## Calculate for Clade
+```{r}
+# Group data by Pop × Treatment instead of ID
+d_fits_grouped <- data.rtpc %>%
+  group_by(Clade) %>%
+  nest() %>%
+  mutate(boatman = map(data, ~nls_multstart(
+    fastest_25cm ~ boatman_2017(temp = Body_temp, rmax, tmin, tmax, a, b),
+    data = .x,
+    iter = c(4,4,4,4,4),
+    start_lower = get_start_vals(.x$Body_temp, .x$fastest_25cm, model_name = 'boatman_2017') - 10,
+    start_upper = get_start_vals(.x$Body_temp, .x$fastest_25cm, model_name = 'boatman_2017') + 10,
+    lower = get_lower_lims(.x$Body_temp, .x$fastest_25cm, model_name = 'boatman_2017'),
+    upper = get_upper_lims(.x$Body_temp, .x$fastest_25cm, model_name = 'boatman_2017'),
+    supp_errors = 'Y',
+    convergence_count = FALSE)))
+
+# Get predictions per Pop × Treatment
+d_preds_grouped <- d_fits_grouped %>%
+  mutate(new_data = map(data, ~tibble(Body_temp = seq(min(.x$Body_temp), max(.x$Body_temp), length.out = 1000)))) %>%
+  select(-data) %>%
+  mutate(preds = map2(boatman, new_data, ~broom::augment(.x, new_data = .y))) %>%
+  unnest(preds)
+
+# Bootstrap confidence intervals
+# get coefs
+d_fits_grouped <- mutate(d_fits_grouped, coefs = map(boatman, coef))
+library(minpack.lm)
+# fit with nlsLM instead
+
+d_fits_grouped <- mutate(d_fits_grouped, nls_fit = map2(data, coefs, ~nlsLM(fastest_25cm ~ boatman_2017(Body_temp, rmax, tmin, tmax, a,b),
+                                        data = .x,
+                                        start = .y,
+                                        lower = get_lower_lims(.x$Body_temp, .x$fastest_25cm,  model_name = 'boatman_2017'),
+                                        upper = get_upper_lims(.x$Body_temp, .x$fastest_25cm,  model_name = 'boatman_2017'))))
+
+head(d_fits_grouped)
+
+d_fits_grouped$nls_fit[[1]]
+
+library(car)
+# create empty list column
+library(minpack.lm)
+d_fits_grouped <- mutate(d_fits_grouped, bootstrap = list(rep(NA, n())))
+
+# run for loop to bootstrap each refitted model
+for(i in 1:nrow(d_fits_grouped)){
+  temp_data_grouped <- d_fits_grouped$data[[i]]
+  temp_fits_grouped <- minpack.lm::nlsLM(fastest_25cm ~ 'boatman_2017'(Body_temp, rmax, tmin, tmax, a,b),
+               data = temp_data_grouped,
+               start = d_fits_grouped$coefs[[i]],
+               lower = get_lower_lims(temp_data_grouped$Body_temp, temp_data_grouped$fastest_25cm, model_name = 'boatman_2017'),
+               upper = get_upper_lims(temp_data_grouped$Body_temp, temp_data_grouped$fastest_25cm, model_name = 'boatman_2017'))
+  boot <- Boot(temp_fits_grouped, method = 'residual')
+  d_fits_grouped$bootstrap[[i]] <- boot
+  rm(list = c('temp_fit', 'temp_data', 'boot'))
+}
+
+d_fits_grouped
+
+
+# get the raw values of each bootstrap
+d_fits_grouped <- mutate(d_fits_grouped, output_boot = map(bootstrap, function(x) x$t))
+
+
+
+# calculate predictions with a gnarly written function
+d_fits_grouped <- mutate(d_fits_grouped, preds = map2(output_boot, data, function(x, y){
+  temp <- as.data.frame(x) %>%
+    drop_na() %>%
+    mutate(iter = 1:n()) %>%
+    group_by_all() %>%
+    do(data.frame(Body_temp = seq(min(y$Body_temp), max(y$Body_temp), length.out = 1000))) %>%
+    ungroup() %>%
+    mutate(pred ='boatman_2017'(Body_temp, rmax, tmin, tmax, a,b))
+  return(temp)
+}))
+
+# select, unnest and calculate 95% CIs of predictions
+boot_conf_preds_grouped <- select(d_fits_grouped, preds) %>%
+  unnest(preds) %>%
+  group_by(Body_temp, Clade) %>%
+  summarise(conf_lower = quantile(pred, 0.025, na.rm = TRUE),
+            conf_upper = quantile(pred, 0.975, na.rm = TRUE),
+            .groups = 'drop')
+
+fastest_paramsd_fits_grouped <- pivot_longer(d_fits_grouped, names_to = 'model_name', values_to = 'fit', boatman) %>%
+  mutate(params = map(fit, calc_params)) %>%
+  select(Clade, model_name,  params) %>%
+  unnest(params)
+```
+
+
+```{r}
+# Define new population names
+#pop_names <- c("STURT" = "Sturt National Park",
+             #  "MR" = "Muloorina Station",
+            #   "KNGA" = "Kinchega National Park", 
+            #   "NGKT" = "Ngarkat Cons. Park")
+
+# Apply new names & order
+data.rtpc <- data.rtpc %>%
+  mutate(Clade = factor(as.character(Clade),  # Ensure it's treated as a character first
+                      levels = c("North", "South")))  
+
+d_preds_grouped <- d_preds_grouped %>%
+  mutate(Clade = factor(as.character(Clade), levels = c("North", "South")))
+
+boot_conf_preds_grouped <- boot_conf_preds_grouped %>%
+  mutate(Clade = factor(as.character(Clade), levels = c("North", "South")))
+```
+
+
+```{r}
+TPC_boatman <- ggplot(data.rtpc, aes(x = Body_temp, y = fastest_25cm, 
+                                     color = Clade, 
+                                     shape = Clade,)) +
+  geom_point(alpha = 0.7, size = 2) +
+
+  # Add Boatman-fitted curves
+  geom_line(data = d_preds_grouped, aes(x = Body_temp, y = .fitted, 
+                                        color = Clade), 
+            size = 1.5) +
+
+  # Add confidence intervals
+  geom_ribbon(data = boot_conf_preds_grouped, aes(x = Body_temp, ymin = conf_lower, ymax = conf_upper, 
+                                          fill = Clade), 
+             alpha = 0.2, inherit.aes = FALSE) +
+
+  scale_color_manual(values = c("#9E2A2F", "#4A90E2")) +  
+  scale_fill_manual(values = c("#9E2A2F", "#4A90E2")) +  
+  scale_shape_manual(values = c(16, 17)) +  
+
+  theme_bw() +
+  ylim(-0.5, 4) +
+  theme_classic() +
+  labs(x = "Temperature (°C)", 
+       y = "Maximum Sprint Speed 0.25m (m/s)", 
+       color = "Clade", 
+       shape = "Clade", 
+       fill = "Clade")
+
+TPC_boatman
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+## Calculate for Pop
+```{r}
+
+# Group data by Pop × Treatment instead of ID
+d_fits_grouped <- data.rtpc %>%
+  group_by(Pop) %>%
+  nest() %>%
+  mutate(boatman = map(data, ~nls_multstart(
+    fastest_25cm ~ boatman_2017(temp = Body_temp, rmax, tmin, tmax, a, b),
+    data = .x,
+    iter = c(4,4,4,4,4),
+    start_lower = get_start_vals(.x$Body_temp, .x$fastest_25cm, model_name = 'boatman_2017') - 10,
+    start_upper = get_start_vals(.x$Body_temp, .x$fastest_25cm, model_name = 'boatman_2017') + 10,
+    lower = get_lower_lims(.x$Body_temp, .x$fastest_25cm, model_name = 'boatman_2017'),
+    upper = get_upper_lims(.x$Body_temp, .x$fastest_25cm, model_name = 'boatman_2017'),
+    supp_errors = 'Y',
+    convergence_count = FALSE)))
+
+# Get predictions per Pop × Treatment
+d_preds_grouped <- d_fits_grouped %>%
+  mutate(new_data = map(data, ~tibble(Body_temp = seq(min(.x$Body_temp), max(.x$Body_temp), length.out = 1000)))) %>%
+  select(-data) %>%
+  mutate(preds = map2(boatman, new_data, ~broom::augment(.x, new_data = .y))) %>%
+  unnest(preds)
+
+# Bootstrap confidence intervals
+# get coefs
+d_fits_grouped <- mutate(d_fits_grouped, coefs = map(boatman, coef))
+library(minpack.lm)
+# fit with nlsLM instead
+
+d_fits_grouped <- mutate(d_fits_grouped, nls_fit = map2(data, coefs, ~nlsLM(fastest_25cm ~ boatman_2017(Body_temp, rmax, tmin, tmax, a,b),
+                                        data = .x,
+                                        start = .y,
+                                        lower = get_lower_lims(.x$Body_temp, .x$fastest_25cm,  model_name = 'boatman_2017'),
+                                        upper = get_upper_lims(.x$Body_temp, .x$fastest_25cm,  model_name = 'boatman_2017'))))
+
+head(d_fits_grouped)
+
+d_fits_grouped$nls_fit[[1]]
+
+library(car)
+# create empty list column
+library(minpack.lm)
+d_fits_grouped <- mutate(d_fits_grouped, bootstrap = list(rep(NA, n())))
+
+# run for loop to bootstrap each refitted model
+for(i in 1:nrow(d_fits_grouped)){
+  temp_data_grouped <- d_fits_grouped$data[[i]]
+  temp_fits_grouped <- minpack.lm::nlsLM(fastest_25cm ~ 'boatman_2017'(Body_temp, rmax, tmin, tmax, a,b),
+               data = temp_data_grouped,
+               start = d_fits_grouped$coefs[[i]],
+               lower = get_lower_lims(temp_data_grouped$Body_temp, temp_data_grouped$fastest_25cm, model_name = 'boatman_2017'),
+               upper = get_upper_lims(temp_data_grouped$Body_temp, temp_data_grouped$fastest_25cm, model_name = 'boatman_2017'))
+  boot <- Boot(temp_fits_grouped, method = 'residual')
+  d_fits_grouped$bootstrap[[i]] <- boot
+  rm(list = c('temp_fit', 'temp_data', 'boot'))
+}
+
+d_fits_grouped
+
+
+# get the raw values of each bootstrap
+d_fits_grouped <- mutate(d_fits_grouped, output_boot = map(bootstrap, function(x) x$t))
+
+
+
+# calculate predictions with a gnarly written function
+d_fits_grouped <- mutate(d_fits_grouped, preds = map2(output_boot, data, function(x, y){
+  temp <- as.data.frame(x) %>%
+    drop_na() %>%
+    mutate(iter = 1:n()) %>%
+    group_by_all() %>%
+    do(data.frame(Body_temp = seq(min(y$Body_temp), max(y$Body_temp), length.out = 1000))) %>%
+    ungroup() %>%
+    mutate(pred ='boatman_2017'(Body_temp, rmax, tmin, tmax, a,b))
+  return(temp)
+}))
+
+# select, unnest and calculate 95% CIs of predictions
+boot_conf_preds_grouped <- select(d_fits_grouped, preds) %>%
+  unnest(preds) %>%
+  group_by(Body_temp, Pop) %>%
+  summarise(conf_lower = quantile(pred, 0.025, na.rm = TRUE),
+            conf_upper = quantile(pred, 0.975, na.rm = TRUE),
+            .groups = 'drop')
+
+fastest_paramsd_fits_grouped <- pivot_longer(d_fits_grouped, names_to = 'model_name', values_to = 'fit', boatman) %>%
+  mutate(params = map(fit, calc_params)) %>%
+  select(Pop, model_name,  params) %>%
+  unnest(params)
+```
+
+
+```{r}
+# Define new population names
+pop_names <- c("STURT" = "Sturt National Park",
+               "MR" = "Muloorina Station",
+               "KNGA" = "Kinchega National Park", 
+               "NGKT" = "Ngarkat Cons. Park")
+
+# Apply new names & order
+data.rtpc <- data.rtpc %>%
+  mutate(Pop = factor(as.character(Pop),  # Ensure it's treated as a character first
+                      levels = c("STURT", "MR", "KNGA", "NGKT"),  # Set order
+                      labels = pop_names))  # Rename
+
+d_preds_grouped <- d_preds_grouped %>%
+  mutate(Pop = factor(as.character(Pop), levels = c("STURT", "MR", "KNGA", "NGKT"), labels = pop_names))
+
+boot_conf_preds_grouped <- boot_conf_preds_grouped %>%
+  mutate(Pop = factor(as.character(Pop), levels = c("STURT", "MR", "KNGA", "NGKT"), labels = pop_names))
+```
+
+
+```{r}
+TPC_boatman_pop <- ggplot(data.rtpc, aes(x = Body_temp, y = fastest_25cm, 
+                                         color = Pop, 
+                                         shape = Pop)) +  # Fixed closing parenthesis
+  geom_point(alpha = 0.7, size = 2) +
+
+  # Add Boatman-fitted curves
+  geom_line(data = d_preds_grouped, aes(x = Body_temp, y = .fitted, 
+                                        color = Pop), 
+            size = 1.5) +
+
+  # Add confidence intervals
+  geom_ribbon(data = boot_conf_preds_grouped, aes(x = Body_temp, ymin = conf_lower, ymax = conf_upper, 
+                                                  fill = Pop), 
+              alpha = 0.2, inherit.aes = FALSE) +
+
+  scale_color_manual(values = c("darkblue", "darkred", "lightblue", "darkgreen", 
+                                "purple", "orange", "brown", "pink")) +  
+  scale_fill_manual(values = c("darkblue", "darkred", "lightblue", "darkgreen", 
+                               "purple", "orange", "brown", "pink")) +  
+  scale_shape_manual(values = c(16, 17, 18, 19, 15, 7, 8, 10)) +  
+
+  theme_bw() +
+  ylim(-0.5, 4) +
+  theme_classic() +
+  labs(x = "Temperature (°C)", 
+       y = "Maximum Sprint Speed 0.25m (m/s)", 
+       color = "Pop", 
+       shape = "Pop", 
+       fill = "Pop")
+
+TPC_boatman_pop
+
+```
+
+```{r}
+ggsave("~/Desktop/phd/Documents/Chapter_1_Honours/TELO.tiff", TPC_boatman_pop, width = 7.5, height = 4, dpi = 300)
+```
+
+
+
+
+
+
+## Calculate for Treatment
+```{r}
+
+# Group data by Pop × Treatment instead of ID
+d_fits_grouped <- data.rtpc %>%
+  group_by(Treatment) %>%
+  nest() %>%
+  mutate(boatman = map(data, ~nls_multstart(
+    fastest_25cm ~ boatman_2017(temp = Body_temp, rmax, tmin, tmax, a, b),
+    data = .x,
+    iter = c(4,4,4,4,4),
+    start_lower = get_start_vals(.x$Body_temp, .x$fastest_25cm, model_name = 'boatman_2017') - 5,
+    start_upper = get_start_vals(.x$Body_temp, .x$fastest_25cm, model_name = 'boatman_2017') + 5,
+    lower = get_lower_lims(.x$Body_temp, .x$fastest_25cm, model_name = 'boatman_2017'),
+    upper = get_upper_lims(.x$Body_temp, .x$fastest_25cm, model_name = 'boatman_2017'),
+    supp_errors = 'Y',
+    convergence_count = FALSE)))
+
+# Get predictions per Pop × Treatment
+d_preds_grouped <- d_fits_grouped %>%
+  mutate(new_data = map(data, ~tibble(Body_temp = seq(min(.x$Body_temp), max(.x$Body_temp), length.out = 1000)))) %>%
+  dplyr::select(-data) %>%
+  mutate(preds = map2(boatman, new_data, ~broom::augment(.x, new_data = .y))) %>%
+  unnest(preds)
+
+# Bootstrap confidence intervals
+# get coefs
+d_fits_grouped <- mutate(d_fits_grouped, coefs = map(boatman, coef))
+library(minpack.lm)
+# fit with nlsLM instead
+
+d_fits_grouped <- mutate(d_fits_grouped, nls_fit = map2(data, coefs, ~nlsLM(fastest_25cm ~ boatman_2017(Body_temp, rmax, tmin, tmax, a,b),
+                                        data = .x,
+                                        start = .y,
+                                        lower = get_lower_lims(.x$Body_temp, .x$fastest_25cm,  model_name = 'boatman_2017'),
+                                        upper = get_upper_lims(.x$Body_temp, .x$fastest_25cm,  model_name = 'boatman_2017'))))
+
+head(d_fits_grouped)
+
+d_fits_grouped$nls_fit[[1]]
+
+library(car)
+# create empty list column
+library(minpack.lm)
+d_fits_grouped <- mutate(d_fits_grouped, bootstrap = list(rep(NA, n())))
+
+# run for loop to bootstrap each refitted model
+for(i in 1:nrow(d_fits_grouped)){
+  temp_data_grouped <- d_fits_grouped$data[[i]]
+  temp_fits_grouped <- minpack.lm::nlsLM(fastest_25cm ~ 'boatman_2017'(Body_temp, rmax, tmin, tmax, a,b),
+               data = temp_data_grouped,
+               start = d_fits_grouped$coefs[[i]],
+               lower = get_lower_lims(temp_data_grouped$Body_temp, temp_data_grouped$fastest_25cm, model_name = 'boatman_2017'),
+               upper = get_upper_lims(temp_data_grouped$Body_temp, temp_data_grouped$fastest_25cm, model_name = 'boatman_2017'))
+  boot <- Boot(temp_fits_grouped, method = 'residual')
+  d_fits_grouped$bootstrap[[i]] <- boot
+  rm(list = c('temp_fit', 'temp_data', 'boot'))
+}
+
+d_fits_grouped
+
+
+# get the raw values of each bootstrap
+d_fits_grouped <- mutate(d_fits_grouped, output_boot = map(bootstrap, function(x) x$t))
+
+
+
+# calculate predictions with a gnarly written function
+d_fits_grouped <- mutate(d_fits_grouped, preds = map2(output_boot, data, function(x, y){
+  temp <- as.data.frame(x) %>%
+    drop_na() %>%
+    mutate(iter = 1:n()) %>%
+    group_by_all() %>%
+    do(data.frame(Body_temp = seq(min(y$Body_temp), max(y$Body_temp), length.out = 1000))) %>%
+    ungroup() %>%
+    mutate(pred ='boatman_2017'(Body_temp, rmax, tmin, tmax, a,b))
+  return(temp)
+}))
+
+# select, unnest and calculate 95% CIs of predictions
+boot_conf_preds_grouped <- dplyr::select(d_fits_grouped, preds) %>%
+  unnest(preds) %>%
+  group_by(Body_temp, Treatment) %>%
+  summarise(conf_lower = quantile(pred, 0.025, na.rm = TRUE),
+            conf_upper = quantile(pred, 0.975, na.rm = TRUE),
+            .groups = 'drop')
+
+fastest_paramsd_fits_grouped <- pivot_longer(d_fits_grouped, names_to = 'model_name', values_to = 'fit', boatman) %>%
+  mutate(params = map(fit, calc_params)) %>%
+  dplyr::select(Treatment, model_name,  params) %>%
+  unnest(params)
+```
+
+
+
+
+
+```{r}
+TPC_boatman_treat <- ggplot(data.rtpc, aes(x = Body_temp, y = fastest_25cm, 
+                                         color = Treatment, 
+                                         shape =  Treatment)) +  # Fixed closing parenthesis
+  geom_point(alpha = 0.7, size = 2) +
+  geom_line(data = d_preds_grouped, aes(x = Body_temp, y = .fitted, 
+                                        color = Treatment), 
+            size = 1.5) +
+  geom_ribbon(data = boot_conf_preds_grouped, aes(x = Body_temp, ymin = conf_lower, ymax = conf_upper, 
+                                                  fill = Treatment), 
+              alpha = 0.2, inherit.aes = FALSE) +
+
+  scale_color_manual(values = c("#4A90E2", "#9E2A2F")) +  
+  scale_fill_manual(values = c("#4A90E2", "#9E2A2F")) +  
+  scale_shape_manual(values = c(16, 17)) +  
+
+  #theme_bw() +
+ # ylim(-0.5, 4) +
+  #xlim(4,45)+
+ 
+  labs(x = "Temperature (°C)", 
+       y = "Maximum Sprint Speed 0.25m (m/s)", 
+       color = "Treatment", 
+       shape = "Treatment", 
+       fill = "Treatment") +
+theme_classic()+
+    theme(
+    axis.title = element_text(size = 15),
+    axis.text  = element_text(size = 14))+
+  theme(legend.position = "none")
+
+TPC_boatman_treat
+
+```
+
+```{r}
+ggsave("~/Desktop/phd/Documents/Chapter_1_Honours/TELO.tiff", TPC_boatman_treat, width = 7.5, height = 4, dpi = 300)
+```
+
+
+```{r}
+# Get individual curve predictions (from your faceted plot code)
+# d_preds should already exist from your individual fitting code
+
+TPC_boatman_treat <- ggplot() +  
+  # Raw data points
+  geom_point(data = data.rtpc, 
+             aes(x = Body_temp, y = fastest_25cm, color = Treatment, shape = Treatment),
+             alpha = 0.7, size = 2) +
+  
+  # Individual curves (thin, transparent)
+  geom_line(data = d_preds, 
+            aes(x = Body_temp, y = .fitted, group = ID, color = Treatment),
+            alpha = 0.2, size = 0.5) +
+  
+  # Treatment-level confidence ribbon
+  geom_ribbon(data = boot_conf_preds_grouped, 
+              aes(x = Body_temp, ymin = conf_lower, ymax = conf_upper, 
+                  fill = Treatment), 
+              alpha = 0.2, inherit.aes = FALSE) +
+  
+  # Treatment-level curves (thick, prominent)
+  geom_line(data = d_preds_grouped, 
+            aes(x = Body_temp, y = .fitted, color = Treatment), 
+            size = 2, inherit.aes = FALSE) +
+  
+  scale_color_manual(values = c("#4A90E2", "#9E2A2F")) +  
+  scale_fill_manual(values = c("#4A90E2", "#9E2A2F")) +  
+  scale_shape_manual(values = c(16, 17)) +  
+  
+  labs(x = "Temperature (°C)", 
+       y = "Maximum Sprint Speed 0.25m (m/s)", 
+       color = "Treatment", 
+       shape = "Treatment", 
+       fill = "Treatment") +
+  theme_classic() +
+  theme(
+    axis.title = element_text(size = 15),
+    axis.text = element_text(size = 14),
+    legend.position = "right")
+
+TPC_boatman_treat
+```
+
+```{r}
+# Calculate treatment-level means for positioning the range
+param_summary <- d_params %>%
+  group_by(Treatment) %>%
+  summarise(
+    mean_topt = mean(topt, na.rm = TRUE),
+    mean_breadth = mean(breadth, na.rm = TRUE),
+    mean_rmax = mean(rmax, na.rm = TRUE),
+    .groups = 'drop'
+  )
+
+# Create the main plot - clean version without P80
+TPC_boatman_treat <- ggplot(data.rtpc, aes(x = Body_temp, y = fastest_25cm, 
+                                         color = Treatment, 
+                                         shape = Treatment)) +  
+  geom_point(alpha = 0.7, size = 2) +
+  
+  geom_line(data = d_preds_grouped, aes(x = Body_temp, y = .fitted, 
+                                        color = Treatment), 
+            size = 1.5) +
+  
+  geom_ribbon(data = boot_conf_preds_grouped, 
+              aes(x = Body_temp, ymin = conf_lower, ymax = conf_upper, 
+                  fill = Treatment), 
+              alpha = 0.2, inherit.aes = FALSE) +
+  
+  # Add small boxplots for Topt at the top
+  geom_boxplot(data = d_params,
+               aes(x = topt, y = max(d_preds_grouped$.fitted) + 1.7,
+                   group = Treatment, fill = Treatment, color = Treatment),
+               width = 0.3, alpha = 0.5, outlier.size = 1) +
+  
+  # Add single Topt label in black
+  geom_text(data = data.frame(x = mean(d_params$topt), 
+                              y = max(d_preds_grouped$.fitted) + 2.1),
+            aes(x = x, y = y, label = "T[opt]"),
+            parse = TRUE, size = 4, fontface = "bold", 
+            color = "black", inherit.aes = FALSE) +
+  
+  # Add small boxplots for Rmax on the right
+  geom_boxplot(data = d_params,
+               aes(x = max(data.rtpc$Body_temp) - 2,
+                   y = rmax, 
+                   group = Treatment, fill = Treatment, color = Treatment),
+               width = 1.5, alpha = 0.5, outlier.size = 1) +
+  
+  # Add single Rmax label in black
+  geom_text(data = data.frame(x = max(data.rtpc$Body_temp) - 0.5,
+                              y = mean(d_params$rmax)),
+            aes(x = x, y = y, label = "R[max]"),
+            parse = TRUE, size = 4, fontface = "bold", 
+            color = "black", hjust = 0, inherit.aes = FALSE) +
+  
+  scale_color_manual(values = c("#4A90E2", "#9E2A2F")) +  
+  scale_fill_manual(values = c("#4A90E2", "#9E2A2F")) +  
+  scale_shape_manual(values = c(16, 17)) +  
+  
+  labs(x = "Temperature (°C)", 
+       y = "Maximum Sprint Speed 0.25m (m/s)", 
+       color = "Treatment", 
+       shape = "Treatment", 
+       fill = "Treatment") +
+  theme_classic() +
+  theme(
+    axis.title = element_text(size = 15),
+    axis.text = element_text(size = 14),
+    legend.position = "none")
+
+TPC_boatman_treat
+```
+```{r}
+ggsave("~/Desktop/phd/Documents/Chapter_1_Honours/TELO.tiff", TPC_boatman_treat, width = 7.5, height = 4, dpi = 300)
+```
+
+
+```{r}
+SPRINT <- ggplot(combined_data, aes(x =Tgape, y = topt)) +
+  geom_point(size = 3, alpha = 0.7) +
+  geom_smooth(method = "lm", se = 0.2, color = "black") +    
+  labs(title = "(f)") +
+  xlab("P80 (°C)") +
+  ylab("Rmax (m/s)") +
+  theme_classic() +
+  #facet_wrap(~Pop)+
+  scale_color_manual(values = c("blue", "red", "green", "orange"))  # Adjust colors as needed
+
+SPRINT
+
+```
+
+```{r}
+ggsave("~/Desktop/phd/Documents/Chapter_1_Honours/TELO.tiff", SPRINT, width = 7.5, height = 4, dpi = 300)
+```
+
+
+
+
+
+
+```{r}
+
+d_params$Pop <- factor(d_params$Pop, levels = c("STURT", "MR", "KNGA", "NGKT"))
+d_params$Treatment <- factor(d_params$Treatment, levels = c("Warm", "Cool"))
+```
+
+
+
+
+
+
+
+
+```{r}
+
+library(ggplot2)
+
+pd  <- position_dodge(width = 0.8) 
+pjd <- position_jitterdodge(dodge.width = 0.8, jitter.width = 0.05)
+
+topt_plot <- ggplot(d_params,
+       aes(x = Clade,
+           y = topt,
+           fill = Treatment,
+           shape = Treatment)) +     
+  # jittered points
+  geom_point(position = pjd,
+             size      = 2.5,
+             alpha     = 0.2,
+             colour    = "black") +
+
+  # mean ± SE
+  stat_summary(
+    aes(fill = Treatment),
+    fun.data = mean_se,
+    geom = "errorbar",
+    size = 2,
+    width = 0,
+    position = pd
+  ) +
+  stat_summary(
+    aes(fill = Treatment),
+    fun = mean,
+    geom = "point",
+    shape = 21,
+    size = 3,
+    colour = "black",
+    position = pd
+  ) +
+
+    ylim(30, 43)+
+  scale_y_continuous(
+  labels = scales::number_format(accuracy = 0.01)
+)+
+
+annotate("text", x =0.825, y = 41, label = "a", size = 6, color = "black") + 
+annotate("text", x =1.175, y = 41, label = "b", size = 6, color = "black") + 
+  annotate("text", x =1.825, y = 41, label = "a", size = 6, color = "black") + 
+  annotate("text", x =2.175, y = 41, label = "b", size = 6, color = "black") + 
+  scale_shape_manual(values = c(16, 17)) +
+  scale_fill_manual(values = c(Warm = "#9E2A2F",
+                               Cool = "#4A90E2")) +
+  labs(x = "Clade", 
+       y = expression(T[opt]~ "("*degree*C*")")) +
+  theme_classic() +
+  theme(
+    axis.title = element_text(size = 16, colour = "black"),   # black axis titles
+    axis.text  = element_text(size = 14, colour = "black"),   # black tick labels
+    axis.line  = element_line(linewidth = 1.2, colour = "black"),  # thicker axis lines
+    legend.position = "none"
+  )
+
+topt_plot
+
+```
+
+
+```{r}
+ggsave("~/Desktop/phd/Documents/Chapter_1_Honours/TELO.tiff", Toptgraph, width = 7.5, height = 4, dpi = 300)
+```
+
+
+
+
+
+
+
+
+
+
+```{r}
+
+library(ggplot2)
+
+pd  <- position_dodge(width = 0.8) 
+pjd <- position_jitterdodge(dodge.width = 0.8, jitter.width = 0.05)
+
+rmax_plot <- ggplot(d_params,
+       aes(x = Clade,
+           y = rmax,
+           fill = Treatment,
+           shape = Treatment)) +     
+  # jittered points
+  geom_point(position = pjd,
+             size      = 2.5,
+             alpha     = 0.2,
+             colour    = "black") +
+
+  # mean ± SE
+  stat_summary(
+    aes(fill = Treatment),
+    fun.data = mean_se,
+    geom = "errorbar",
+    size = 2,
+    width = 0,
+    position = pd
+  ) +
+  stat_summary(
+    aes(fill = Treatment),
+    fun = mean,
+    geom = "point",
+    shape = 21,
+    size = 3,
+    colour = "black",
+    position = pd
+  ) +
+
+  annotate("text", x =0.825, y = 3.8, label = "a", size = 6, color = "black") + 
+annotate("text", x =1.175, y = 3.8, label = "b", size = 6, color = "black") + 
+  annotate("text", x =1.825, y = 3.8, label = "a", size = 6, color = "black") + 
+  annotate("text", x =2.175, y = 3.8, label = "b", size = 6, color = "black") + 
+  scale_y_continuous(
+  labels = scales::number_format(accuracy = 0.01, width = 6)
+)+
+  #ylim(30, 43)+
+
+  scale_shape_manual(values = c(16, 17)) +
+  scale_fill_manual(values = c(Warm = "#9E2A2F",
+                               Cool = "#4A90E2")) +
+  labs(x = "Clade", 
+    
+   y = expression(R[max]~ "("*m/s*")")) +
+  
+  theme_classic() +
+  theme(
+    axis.title = element_text(size = 16, colour = "black"),   # black axis titles
+    axis.text  = element_text(size = 14, colour = "black"),   # black tick labels
+    axis.line  = element_line(linewidth = 1.2, colour = "black"),  # thicker axis lines
+    legend.position = "none"
+  )
+
+rmax_plot
+
+```
+
+
+```{r}
+ggsave("~/Desktop/phd/Documents/Chapter_1_Honours/TELO.tiff", rmaxgraph, width = 7.5, height = 4, dpi = 300)
+```
+
+
+
+
+
+```{r}
+library(ggplot2)
+
+pd  <- position_dodge(width = 0.8) 
+pjd <- position_jitterdodge(dodge.width = 0.8, jitter.width = 0.05)
+
+p80_plot <- ggplot(d_params,
+       aes(x = Clade,
+           y = breadth,
+           fill = Treatment,
+           shape = Treatment)) +     
+  # jittered points
+  geom_point(position = pjd,
+             size      = 2.5,
+             alpha     = 0.2,
+             colour    = "black") +
+
+  # mean ± SE
+  stat_summary(
+    aes(fill = Treatment),
+    fun.data = mean_se,
+    geom = "errorbar",
+    size = 2,
+    width = 0,
+    position = pd
+  ) +
+  stat_summary(
+    aes(fill = Treatment),
+    fun = mean,
+    geom = "point",
+    shape = 21,
+    size = 3,
+    colour = "black",
+    position = pd
+  ) +
+
+   ylim(7, 15)+
+  scale_y_continuous(
+  labels = scales::number_format(accuracy = 0.01))+
+  annotate("text", x =0.825, y = 14.5, label = "a", size = 6, color = "black") + 
+annotate("text", x =1.175, y = 14.5, label = "b", size = 6, color = "black") + 
+  annotate("text", x =1.825, y = 14.5, label = "a", size = 6, color = "black") + 
+  annotate("text", x =2.175, y = 14.5, label = "b", size = 6, color = "black") + 
+  scale_shape_manual(values = c(16, 17)) +
+  scale_fill_manual(values = c(Warm = "#9E2A2F",
+                               Cool = "#4A90E2")) +
+  labs(x = "Clade",
+       y = expression(P[80]~ "("*degree*C*")")) +
+  theme_classic() +
+  theme(
+    axis.title = element_text(size = 16, colour = "black"),   # black axis titles
+    axis.text  = element_text(size = 14, colour = "black"),   # black tick labels
+    axis.line  = element_line(linewidth = 1.2, colour = "black"),  # thicker axis lines
+    legend.position = "none"
+  )
+
+p80_plot
+
+```
+
+
+
+```{r}
+ggsave("~/Desktop/phd/Documents/Chapter_1_Honours/TELO.tiff", breadthgraph, width = 7.5, height = 4, dpi = 300)
+```
+
+
+
+
+
+
+```{r}
+sprint.par.figure <- ggpubr::ggarrange(
+  topt_plot , rmax_plot, p80_plot,
+  ncol = 1, nrow = 3,
+  widths = c(1, 1),    # relative widths of columns
+  heights = c(1, 1)    # relative heights of rows
+) +
+  annotate("text",
+           x = c(0.024, 0.024, 0.024),
+           y = c(0.98, 0.65, 0.3),
+           label = c("A)", "B)", "C)"),
+           size = 4, fontface = "bold")
+sprint.par.figure
+```
+
+```{r}
+ggsave("~/Desktop/phd/Documents/Chapter_1_Honours/TELO.tiff", sprint.par.figure, width = 6, height = 8, dpi = 300)
+```
+
+```{r}
+## IMPORT DATA
+pictus_CTMAX <- read_csv("~/Desktop/phd/Documents/Chapter 3/Datasheets/CTmax_DR_2024.csv")
+pictus_CTMAX$Treatment <- as.factor(pictus_CTMAX$Treatment)
+pictus_CTMAX$Pop <- as.factor(pictus_CTMAX$Pop)
+pictus_CTMAX$Pop <- factor(pictus_CTMAX$Pop, levels = c("STURT", "MR", "KNGA", "NRKT"))
+pictus_CTMAX$Treatment <- factor(pictus_CTMAX$Treatment, levels = c("Cool", "Warm"))
+```
+
+
+# Tgape
+
+
+
+
+```{r}
+library(ggplot2)
+
+pd  <- position_dodge(width = 0.8) 
+pjd <- position_jitterdodge(dodge.width = 0.8, jitter.width = 0.05)
+
+tgape_plot <- ggplot(pictus_CTMAX,
+       aes(x = Clade,
+           y = Tgape,
+           fill = Treatment,
+           shape = Treatment)) +     
+  # jittered points
+  geom_point(position = pjd,
+             size      = 2.5,
+             alpha     = 0.2,
+             colour    = "black") +
+
+  # mean ± SE
+  stat_summary(
+    aes(fill = Treatment),
+    fun.data = mean_se,
+    geom = "errorbar",
+    size = 2,
+    width = 0,
+    position = pd
+  ) +
+  stat_summary(
+    aes(fill = Treatment),
+    fun = mean,
+    geom = "point",
+    shape = 21,
+    size = 3,
+    colour = "black",
+    position = pd
+  ) +
+    annotate("text", x =0.825, y = 45, label = "a", size = 6, color = "black") + 
+annotate("text", x =1.175, y = 45, label = "a", size = 6, color = "black") + 
+  annotate("text", x =1.825, y = 45, label = "a", size = 6, color = "black") + 
+  annotate("text", x =2.175, y = 45, label = "a", size = 6, color = "black") + 
+  scale_shape_manual(values = c(16, 17)) +
+  scale_fill_manual(values = c(Warm = "#9E2A2F",
+                               Cool = "#4A90E2")) +
+  labs(x = "Clade", 
+        y = expression(T[gape]~"("*degree*C*")"))+
+  theme_classic() +
+  theme(
+    axis.title = element_text(size = 16, colour = "black"),   # black axis titles
+    axis.text  = element_text(size = 14, colour = "black"),   # black tick labels
+    axis.line  = element_line(linewidth = 1.2, colour = "black"),  # thicker axis lines
+    legend.position = "none"
+  )
+
+tgape_plot
+```
+
+
+
+```{r}
+ggsave("~/Desktop/phd/Documents/Chapter_1_Honours/TELO.tiff", Ctmin_graph, width = 4, height = 4, dpi = 300)
+```
+
+
+
+
+
+
+```{r}
+
+library(ggplot2)
+
+pd  <- position_dodge(width = 0.8) 
+pjd <- position_jitterdodge(dodge.width = 0.8, jitter.width = 0.05)
+
+vtmax_plot <- ggplot(pictus_CTMAX,
+       aes(x = Clade,
+           y = Vtmax,
+           fill = Treatment,
+           shape = Treatment)) +     
+  # jittered points
+  geom_point(position = pjd,
+             size      = 2.5,
+             alpha     = 0.2,
+             colour    = "black") +
+
+  # mean ± SE
+  stat_summary(
+    aes(fill = Treatment),
+    fun.data = mean_se,
+    geom = "errorbar",
+    size = 2,
+    width = 0,
+    position = pd
+  ) +
+  stat_summary(
+    aes(fill = Treatment),
+    fun = mean,
+    geom = "point",
+    shape = 21,
+    size = 3,
+    colour = "black",
+    position = pd
+  ) +
+  annotate("text", x =0.825, y = 45, label = "a", size = 6, color = "black") + 
+annotate("text", x =1.175, y = 45, label = "a", size = 6, color = "black") + 
+  annotate("text", x =1.825, y = 45, label = "a", size = 6, color = "black") + 
+  annotate("text", x =2.175, y = 45, label = "a", size = 6, color = "black") + 
+   
+  scale_shape_manual(values = c(16, 17)) +
+  scale_fill_manual(values = c(Warm = "#9E2A2F",
+                               Cool = "#4A90E2")) +
+  labs(x = "Clade", 
+       y = expression(VT[max]~"("*degree*C*")")
+)+
+  theme_classic() +
+  theme(
+    axis.title = element_text(size = 16, colour = "black"),   # black axis titles
+    axis.text  = element_text(size = 14, colour = "black"),   # black tick labels
+    axis.line  = element_line(linewidth = 1.2, colour = "black"),  # thicker axis lines
+    legend.position = "none"
+  )
+
+vtmax_plot
+```
+
+
+
+```{r}
+ggsave("~/Desktop/phd/Documents/Chapter_1_Honours/TELO.tiff", vtmax_plot, width = 4, height = 3, dpi = 300)
+```
+
+
+
+
+
+
+```{r}
+library(ggplot2)
+
+pd  <- position_dodge(width = 0.8) 
+pjd <- position_jitterdodge(dodge.width = 0.8, jitter.width = 0.05)
+
+ctmin_plot <- ggplot(pictus_CTMAX,
+       aes(x = Clade,
+           y = Ctmin,
+           fill = Treatment,
+           shape = Treatment)) +     
+  # jittered points
+  geom_point(position = pjd,
+             size      = 2.5,
+             alpha     = 0.2,
+             colour    = "black") +
+
+  # mean ± SE
+  stat_summary(
+    aes(fill = Treatment),
+    fun.data = mean_se,
+    geom = "errorbar",
+    size = 2,
+    width = 0,
+    position = pd
+  ) +
+  stat_summary(
+    aes(fill = Treatment),
+    fun = mean,
+    geom = "point",
+    shape = 21,
+    size = 3,
+    colour = "black",
+    position = pd
+  ) +
+
+  annotate("text", x =0.825, y = 11.5, label = "b", size = 6, color = "black") + 
+annotate("text", x =1.175, y = 11.5, label = "b", size = 6, color = "black") + 
+  annotate("text", x =1.825, y = 11.5, label = "a", size = 6, color = "black") + 
+  annotate("text", x =2.175, y = 11.5, label = "a", size = 6, color = "black") +  
+  scale_shape_manual(values = c(16, 17)) +
+  scale_fill_manual(values = c(Warm = "#9E2A2F",
+                               Cool = "#4A90E2")) +
+  labs(x = "Clade", 
+        y = expression(CT[min]~ "("*degree*C*")")) +
+  theme_classic() +
+  theme(
+    axis.title = element_text(size = 16, colour = "black"),   # black axis titles
+    axis.text  = element_text(size = 14, colour = "black"),   # black tick labels
+    axis.line  = element_line(linewidth = 1.2, colour = "black"),  # thicker axis lines
+    legend.position = "none"
+  )
+
+ctmin_plot
+```
+
+
+
+```{r}
+ggsave("~/Desktop/phd/Documents/Chapter_1_Honours/TELO.tiff", Ctmingraph, width = 7.5, height = 4, dpi = 300)
+```
+
+
+
+```{r}
+tgape_plot <- tgape_plot + coord_fixed(ratio = 3/4)   # height = 3, width = 4
+vtmax_plot <- vtmax_plot + coord_fixed(ratio = 3/4) 
+ctmin_plot <- ctmin_plot + coord_fixed(ratio = 3/4) 
+
+```
+
+
+```{r}
+therm.par.figure <- ggpubr::ggarrange(
+  tgape_plot , vtmax_plot, ctmin_plot,
+  ncol = 1, nrow = 3,
+  widths = c(1, 1),    # relative widths of columns
+  heights = c(1, 1)    # relative heights of rows
+) +
+  annotate("text",
+           x = c(0.024, 0.024, 0.024),
+           y = c(0.98, 0.65, 0.3),
+           label = c("A)", "B)", "C)"),
+           size = 4, fontface = "bold")
+therm.par.figure
+```
+
+
+```{r}
+ggsave("~/Desktop/phd/Documents/Chapter_1_Honours/TELO.tiff", therm.par.figure, width = 6, height = 8, dpi = 300)
+```
+
+
+
+
+
+
+```{r}
+library(tidyverse)
+
+# Manually create the table
+df <- tribble(
+  ~Trait, ~Trt_Lower, ~Trt_Mean, ~Trt_Upper, ~Clade_Lower, ~Clade_Mean, ~Clade_Upper,
+  "rTL", -0.75, -0.29, 0.17, -0.85, -0.38, 0.09,
+  "TERT", -0.08, 0.41, 0.90, -0.93, -0.44, 0.06,
+  "Superoxide", 0.25, 0.74, 1.22, -0.28, 0.18, 0.65,
+  "Membrane potential", -0.49, -0.03, 0.44, -0.69, -0.22, 0.25,
+  "Tgape", -0.78, -0.34, 0.12, 0.05, 0.50, 0.95,
+  "VTmax", -0.51, -0.06, 0.39, 0.04, 0.50, 0.95,
+  "Ctmin", -0.48, 0.01, 0.45, -0.97, -0.50, -0.03,
+  "Topt", -1.12, -0.66, -0.20, -0.65, -0.21, 0.24,
+  "rmax", -0.90, -0.45, 0.01, 0.10, 0.55, 1.01,
+  "P80", 0.07, 0.53, 0.98, -0.40, 0.05, 0.49
+)
+
+# Convert Trait to factor with levels in the original order
+df$Trait <- factor(df$Trait, levels = unique(df$Trait))
+
+# Pivot longer for ggplot
+df_long <- df %>%
+  pivot_longer(
+    cols = -Trait,
+    names_to = c("Effect", "Stat"),
+    names_sep = "_",
+    values_to = "Value"
+  ) %>%
+  pivot_wider(names_from = Stat, values_from = Value)
+
+# Panel A: Treatment
+treat_effect <- df_long %>% filter(Effect=="Trt") %>%
+  ggplot(aes(x = Trait, y = Mean)) +
+  geom_point(color = "#1f77b4", size = 3) +
+  geom_errorbar(aes(ymin = Lower, ymax = Upper), width = 0.2) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  coord_flip() +
+  theme_classic(base_size = 14) +
+  labs(x = "Trait", y = "Effect size") +
+  scale_x_discrete(limits = rev(levels(df$Trait))) # Reverse for coord_flip
+
+# Panel B: Clade
+clade_effect <- df_long %>% filter(Effect=="Clade") %>% ggplot(aes(x = Trait, y = Mean)) + geom_point(color = "#ff7f0e", size = 3) + geom_errorbar(aes(ymin = Lower, ymax = Upper), width = 0.2) + geom_hline(yintercept = 0, linetype = "dashed") + coord_flip() + theme_classic(base_size = 14) + labs(x = "Trait", y = "Effect size") + scale_x_discrete(limits = rev(levels(df$Trait))) # Reverse for coord_flip
+```
+
+```{r}
+effect.figure <- ggpubr::ggarrange( treat_effect, clade_effect, 
+                                         ncol = 2, nrow = 1,
+                                         widths = c(10, 10),
+                                         heights = c(10, 10))  +
+  annotate("text", x = c(0.02, 0.67), y = c(0.98, 0.98), label = c("A)", "B)"),
+           size = 5, fontface = "bold")
+
+effect.figure
+
+```
+```{r}
+ggsave("~/Desktop/phd/Documents/Chapter_1_Honours/TELO.tiff", effect.figure, width = 11.25, height = 6, dpi = 300)
+```
+

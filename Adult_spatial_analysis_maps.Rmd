@@ -1,0 +1,1375 @@
+
+title: "Chapterthree_spatial"
+author: "Daniel Ritchie"
+date: "2025-03-25"
+output: html_document
+
+
+```{r}
+library(ggplot2)
+library(sf)
+library(ggspatial)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(dplyr)
+library(terra)
+library(raster) 
+```
+
+
+```{r}
+# Load required libraries
+library(ggplot2)
+library(sf)
+library(ggspatial)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(dplyr)
+library(terra)
+library(raster)  # Needed for raster math operations
+
+# Load sightings data, removing NA values
+sightings <- read.csv("~/Desktop/phd/ARFN/SSD/occurance_records.csv") %>%
+  filter(!is.na(longitude), !is.na(latitude))
+
+# Convert sightings to sf object
+sightings_sf <- st_as_sf(sightings, coords = c("longitude", "latitude"), crs = 4326)
+
+# Study site coordinates
+sites <- data.frame(
+  name = c("Muloorina Station", "Sturt National Park", "Kinchega National Park", "Ngarkat Conservation Park"),
+  lat = c(-29.14, -29.05, -32.32, -35.43),
+  lon = c(137.54, 141.30, 142.17, 140.36)
+)
+site_CHAP1 <- data.frame(
+  name = c("Muloorina Station", "Dhilba Guuranda–Innes National Park"),
+  lat = c(-29.14, -35.2278),
+  lon = c(137.54, 136.8947)
+)
+
+
+
+sites_sf <- st_as_sf(sites, coords = c("lon", "lat"), crs = 4326)
+sites_sf_chap1 <- st_as_sf(site_CHAP1, coords = c("lon", "lat"), crs = 4326)
+
+# Load Australia map
+australia <- ne_countries(country = "Australia", scale = "medium", returnclass = "sf")
+australia_states <- ne_states(country = "Australia", returnclass = "sf")
+
+# Define study area bounding box
+study_bbox <- st_bbox(sightings_sf)  # Get bounding box from study sites
+```
+
+
+```{r}
+# --- Import the downloaded files --- #
+options(timeout = 600)  # Increase timeout to 10 minutes
+download.file("http://thredds.northwestknowledge.net:8080/thredds/fileServer/TERRACLIMATE_ALL/data/TerraClimate_tmin_2023.nc", 
+              destfile = "tmin.nc", mode = "wb")
+```
+
+
+```{r}
+## Load imported NC files
+
+pet <- rast("TerraClimate_pet_2023.nc")
+ppt <- rast("TerraClimate_ppt_2023.nc")
+tmin <-rast("tmin_2023.nc")
+tmax <-rast("tmax_2023.nc")
+
+# --- Compute mean precipitation and evapotranspiration --- #
+ppt_mean <- mean(ppt,  na.rm = TRUE)
+pet_mean <- mean(pet,  na.rm = TRUE)
+tmin_mean <- mean(tmin,  na.rm = TRUE)
+tmax_mean <- mean(tmax,  na.rm = TRUE)
+
+# --- Crop to study area --- #
+study_extent <- extent(c(study_bbox$xmin, study_bbox$xmax, study_bbox$ymin, study_bbox$ymax))
+ppt_mean <- crop(ppt_mean, study_extent)
+pet_mean <- crop(pet_mean, study_extent)
+tmin_mean <- crop(tmin_mean, study_extent)
+tmax_mean <- crop(tmax_mean, study_extent)
+
+# --- Calculate aridity index --- #
+aridity_index <- ppt_mean/pet_mean
+
+# --- Convert raster to dataframe for ggplot --- #
+aridity_index_df <- as.data.frame(aridity_index, xy = TRUE)
+colnames(aridity_index_df) <- c("longitude", "latitude", "aridity")
+
+
+tmin_mean_df <- as.data.frame(tmin_mean, xy = TRUE)
+colnames(tmin_mean_df) <- c("longitude", "latitude", "tmin")
+
+ppt_mean_df <- as.data.frame(ppt_mean, xy = TRUE)
+colnames(ppt_mean_df) <- c("longitude", "latitude", "ppt")
+
+
+
+tmax_mean_df <- as.data.frame(tmax_mean, xy = TRUE)
+colnames(tmax_mean_df) <- c("longitude", "latitude", "tmax")
+
+aridity_index_df <- aridity_index_df %>%
+  mutate(category = case_when(
+    is.infinite(aridity) ~ 'Humid',
+    aridity >= 0.65 ~ 'Humid',
+    aridity >= 0.5 & aridity < 0.65 ~ 'Dry sub-humid',
+    aridity >= 0.2 & aridity < 0.5 ~ 'Semi-arid',
+    aridity >= 0.05 & aridity < 0.2 ~ 'Arid',
+    aridity < 0.05 ~ 'Hyper-arid'
+  )) %>%
+  mutate(category = factor(category, levels = c( 
+                                                'Hyper-arid', 'Arid', 'Semi-arid', 
+                                                'Dry sub-humid', 'Humid'), ordered = TRUE))
+
+
+library(sf)
+drainage_basins <- st_read("~/Desktop/phd/ARFN/SSD/42343_shp/rbasin_polygon.shp")
+drainage_basins <- st_transform(drainage_basins, crs = st_crs(australia))
+```
+
+
+
+
+```{r}
+# --- Plot study area with aridity data --- #
+Study_area_chap3 <- ggplot() +
+  geom_raster(data = aridity_index_df, aes(x = longitude, y = latitude, fill = category)) +
+scale_fill_manual(values = c(
+  'Hyper-arid' = '#d73027', # Orange-red
+  'Arid' = '#fc8d59',  
+  'Semi-arid' = '#fee08b',  
+  'Dry sub-humid' = '#d9ef8b',  
+  'Humid' = '#1a9850'),
+  name = "Aridity Index"
+) +
+#geom_sf(data = drainage_basins, fill = NA, color = "white", size = 0.2) +
+  #geom_sf(data = australia, fill = NA, color = "black", size=1) +
+  geom_sf(data = australia_states, fill = NA, color = "black", size=1) +
+  geom_sf(data = sightings_sf, color = "blue", alpha = 0.1, size = 0.5) +
+  geom_sf(data = sites_sf, color = "black", size = 2.5) +
+  geom_text(data = sites, aes(x = lon, y = lat, label = name),color = "black", hjust = -0.1, angle = 10, size = 4) +
+  annotation_scale(location = "bl", width_hint = 0.3) +
+  annotation_north_arrow(location = "tr", which_north = "true", 
+                         style = north_arrow_fancy_orienteering()) +
+  coord_sf(xlim = c(study_bbox$xmin, study_bbox$xmax), ylim = c(study_bbox$ymin, study_bbox$ymax), expand = FALSE) +
+  labs(title = "Study Sites with Aridity Index", x = "Longitude", y = "Latitude") +
+  coord_sf(xlim = c(133, 149), ylim = c(-37, -25.5), expand = FALSE) +  # Zoom in
+  theme_minimal()+
+  theme(
+    panel.grid = element_blank()
+  )
+
+Study_area_chap3
+```
+```{r}
+# --- Load libraries ---
+library(ggplot2)
+library(sf)
+library(ggspatial)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(dplyr)
+
+# --- Load and clean ALA records ---
+sightings <- read.csv("~/Desktop/phd/ARFN/SSD/occurance_records.csv") %>%
+  filter(!is.na(longitude), !is.na(latitude))
+
+# Convert to sf object
+sightings_sf <- st_as_sf(sightings, coords = c("longitude", "latitude"), crs = 4326)
+
+# --- Load Australia basemap ---
+australia <- ne_countries(country = "Australia", scale = "medium", returnclass = "sf")
+australia_states <- ne_states(country = "Australia", returnclass = "sf")
+
+# --- Plot all ALA records across Australia ---
+AUS_ALA_map <- ggplot() +
+  geom_sf(data = australia, fill = "grey95", color = "grey50", size = 0.5) +
+  geom_sf(data = australia_states, fill = NA, color = "grey40", size = 0.4) +
+  geom_sf(data = sightings_sf, color = "#1f78b4", alpha = 0.3, size = 0.5) +
+  coord_sf(xlim = c(110, 155), ylim = c(-45, -10), expand = FALSE) +
+  labs(
+    title = "ALA Occurrence Records for Painted Dragons",
+    x = "Longitude", y = "Latitude"
+  ) +
+  annotation_scale(location = "bl", width_hint = 0.25) +
+  annotation_north_arrow(location = "tr", which_north = "true", 
+                         style = north_arrow_fancy_orienteering()) +
+  theme_minimal() +
+  theme(
+    panel.grid = element_blank(),
+    plot.title = element_text(hjust = 0.5, face = "bold")
+  )
+
+AUS_ALA_map
+
+```
+
+```{r}
+ggsave("~/Desktop/phd/Documents/Chapter_1_Honours/TELO.tiff", AUS_ALA_map, width = 9, height = 6, dpi = 300)
+```
+
+
+```{r}
+# --- Plot study area with aridity data --- #
+Study_area_chap1 <- ggplot() +
+  geom_raster(data = aridity_index_df, aes(x = longitude, y = latitude, fill = category)) +
+scale_fill_manual(values = c(
+  'Hyper-arid' = '#d73027', # Orange-red
+  'Arid' = '#fc8d59',  
+  'Semi-arid' = '#fee08b',  
+  'Dry sub-humid' = '#d9ef8b',  
+  'Humid' = '#1a9850'),
+  name = "Aridity Index"
+) +
+#geom_sf(data = drainage_basins, fill = NA, color = "white", size = 0.2) +
+  #geom_sf(data = australia, fill = NA, color = "black", size=1) +
+  geom_sf(data = australia_states, fill = NA, color = "black", size=1) +
+  geom_sf(data = sightings_sf, color = "blue", alpha = 0.1, size = 0.5) +
+  geom_sf(data = sites_sf_chap1, color = "black", size = 2.5) +
+ geom_text(data = site_CHAP1, aes(x = lon, y = lat, label = name),color = "black", hjust = -0.1, angle = 10, size = 4) +
+  annotation_scale(location = "bl", width_hint = 0.3) +
+  annotation_north_arrow(location = "tr", which_north = "true", 
+                         style = north_arrow_fancy_orienteering()) +
+  coord_sf(xlim = c(study_bbox$xmin, study_bbox$xmax), ylim = c(study_bbox$ymin, study_bbox$ymax), expand = FALSE) +
+  labs(title = "Study Sites with Aridity Index", x = "Longitude", y = "Latitude") +
+  coord_sf(xlim = c(131, 147), ylim = c(-37, -26), expand = FALSE) +  # Zoom in
+ theme_minimal()+
+  theme(
+    panel.grid = element_blank()
+  )
+
+Study_area_chap1
+```
+```{r}
+ggsave("~/Desktop/phd/Documents/Chapter_1_Honours/TELO.tiff", Study_area_chap1, width = 8, height = 5.5, dpi = 300)
+```
+
+
+```{r}
+tmin_mean_df$tmin_class <- cut(
+  tmin_mean_df$tmin,
+  breaks = c(-Inf, 0, 5, 10, 15, 20, Inf),
+  labels = c("<0°C", "0-5°C", "5-10°C", "10-15°C", "15-20°C", ">20°C")
+)
+# --- Plot study area with aridity data --- #
+Study_area_tmin <- ggplot() +
+  geom_raster(data = tmin_mean_df, aes(x = longitude, y = latitude, fill = tmin_class)) +
+
+    #scale_fill_viridis_c(
+  #  option = "plasma",  # Try "viridis", "plasma", or "inferno"
+ #   name = "Mean Min Temp (°C)"
+#  ) +
+  
+  scale_fill_brewer(
+    palette = "BuYlRd",  # Red-Yellow-Blue palette (reverse for cold=blue)
+    name = "Temperature Class"
+  ) +
+#geom_sf(data = drainage_basins, fill = NA, color = "white", size = 0.2) +
+  #geom_sf(data = australia, fill = NA, color = "black", size=1) +
+  geom_sf(data = australia_states, fill = NA, color = "black", size=1) +
+  geom_sf(data = sightings_sf, color = "blue", alpha = 0.2, size = 0.5) +
+  geom_sf(data = sites_sf, color = "black", size = 2.5) +
+  geom_text(data = sites, aes(x = lon, y = lat, label = name),color = "white", hjust = -0.1, angle = 10, size = 4) +
+  annotation_scale(location = "bl", width_hint = 0.3) +
+  annotation_north_arrow(location = "tr", which_north = "true", 
+                         style = north_arrow_fancy_orienteering()) +
+  coord_sf(xlim = c(study_bbox$xmin, study_bbox$xmax), ylim = c(study_bbox$ymin, study_bbox$ymax), expand = FALSE) +
+  labs(title = "Study Sites with Mean Min temp 2023", x = "Longitude", y = "Latitude") +
+  coord_sf(xlim = c(133, 149), ylim = c(-37, -25.5), expand = FALSE) +  # Zoom in
+  theme_minimal()
+
+Study_area_tmin
+```
+
+
+
+
+
+
+
+
+```{r}
+ggsave("~/Desktop/phd/Documents/Chapter_1_Honours/TELO.tiff", Study_area_tmin, width = 11.25, height = 6, dpi = 300)
+```
+
+```{r}
+
+
+tmax_mean_df$tmax_class <- cut(
+  tmax_mean_df$tmax,
+  breaks = c(-Inf, 15, 20, 25, 30, 35, Inf),
+  labels = c("<15°C", "15-20°C", "20-25°C", "25-30°C", "30-35°C", ">35°C")
+)
+# --- Plot study area with aridity data --- #
+Study_area_tmax <- ggplot() +
+  geom_raster(data = tmax_mean_df, aes(x = longitude, y = latitude, fill = tmax_class)) +
+
+       #scale_fill_viridis_c(
+  #  option = "plasma",  # Try "viridis", "plasma", or "inferno"
+ #   name = "Mean Min Temp (°C)"
+#  ) +
+  
+  scale_fill_brewer(
+    palette = "BuYlRd",  # Red-Yellow-Blue palette (reverse for cold=blue)
+    name = "Temperature Class"
+  ) +
+#geom_sf(data = drainage_basins, fill = NA, color = "white", size = 0.2) +
+  #geom_sf(data = australia, fill = NA, color = "black", size=1) +
+  geom_sf(data = australia_states, fill = NA, color = "black", size=1) +
+  geom_sf(data = sightings_sf, color = "blue", alpha = 0.2, size = 0.5) +
+  geom_sf(data = sites_sf, color = "black", size = 2.5) +
+  geom_text(data = sites, aes(x = lon, y = lat, label = name),color = "white", hjust = -0.1, angle = 10, size = 4) +
+  annotation_scale(location = "bl", width_hint = 0.3) +
+  annotation_north_arrow(location = "tr", which_north = "true", 
+                         style = north_arrow_fancy_orienteering()) +
+  coord_sf(xlim = c(study_bbox$xmin, study_bbox$xmax), ylim = c(study_bbox$ymin, study_bbox$ymax), expand = FALSE) +
+  labs(title = "Study Sites with Mean Max temp 2023", x = "Longitude", y = "Latitude") +
+  coord_sf(xlim = c(133, 149), ylim = c(-37, -25.5), expand = FALSE) +  # Zoom in
+  theme_minimal()
+
+Study_area_tmax
+```
+
+```{r}
+ggsave("~/Desktop/phd/Documents/Chapter_1_Honours/TELO.tiff", Study_area_tmax, width = 11.25, height = 6, dpi = 300)
+```
+
+```{r}
+
+
+ppt_mean_df$ppt_class <- cut(
+  ppt_mean_df$ppt,
+  breaks = c(-Inf, 10, 15, 20, 25, 30, 35, Inf),
+  labels = c("<15mm","10-15mm", "15-20mm", "20-25mm", "25-30mm", "30-35mm", ">35mm")
+)
+# --- Plot study area with aridity data --- #
+Study_area_ppt <- ggplot() +
+  geom_raster(data = ppt_mean_df, aes(x = longitude, y = latitude, fill = ppt_class)) +
+
+       #scale_fill_viridis_c(
+  #  option = "plasma",  # Try "viridis", "plasma", or "inferno"
+ #   name = "Mean Min Temp (°C)"
+#  ) +
+  
+  scale_fill_brewer(
+    palette = "BuYlRd",  # Red-Yellow-Blue palette (reverse for cold=blue)
+    name = "Precipitation Class"
+  ) +
+#geom_sf(data = drainage_basins, fill = NA, color = "white", size = 0.2) +
+  #geom_sf(data = australia, fill = NA, color = "black", size=1) +
+  geom_sf(data = australia_states, fill = NA, color = "black", size=1) +
+  geom_sf(data = sightings_sf, color = "blue", alpha = 0.2, size = 0.5) +
+  geom_sf(data = sites_sf, color = "black", size = 2.5) +
+  geom_text(data = sites, aes(x = lon, y = lat, label = name),color = "white", hjust = -0.1, angle = 10, size = 4) +
+  annotation_scale(location = "bl", width_hint = 0.3) +
+  annotation_north_arrow(location = "tr", which_north = "true", 
+                         style = north_arrow_fancy_orienteering()) +
+  coord_sf(xlim = c(study_bbox$xmin, study_bbox$xmax), ylim = c(study_bbox$ymin, study_bbox$ymax), expand = FALSE) +
+  labs(title = "Study Sites with Mean Max temp 2023", x = "Longitude", y = "Latitude") +
+  coord_sf(xlim = c(133, 149), ylim = c(-37, -25.5), expand = FALSE) +  # Zoom in
+  theme_minimal()
+
+Study_area_ppt
+```
+
+
+
+
+```{r}
+ggsave("~/Desktop/phd/Documents/Chapter_1_Honours/TELO.tiff", Study_area_ppt, width = 11.25, height = 6, dpi = 300)
+```
+
+
+```{r}
+
+# Load required libraries
+library(ggplot2)
+library(sf)
+library(ggspatial)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(dplyr)
+library(terra)
+library(raster)
+library(purrr)
+
+# Define years range for averaging
+years <- c(seq(from = 1995, to = 2015, by = 5), 2020, 2024)
+
+# Load the previously downloaded ppt and pet files
+ppt_files <- paste0('TerraClimate_ppt_', years, '.nc')  # Modify with your actual file paths if needed
+pet_files <- paste0('TerraClimate_pet_', years, '.nc')
+
+# Load raster stacks
+ppt_rasters <- map(.x = ppt_files, ~ stack(.x))
+pet_rasters <- map(.x = pet_files, ~ stack(.x))
+
+# Crop the rasters to the study area
+study_extent <- extent(c(study_bbox$xmin, study_bbox$xmax, study_bbox$ymin, study_bbox$ymax))
+ppt_rasters <- map(.x = ppt_rasters, ~ crop(.x, study_extent))
+pet_rasters <- map(.x = pet_rasters, ~ crop(.x, study_extent))
+
+# Compute mean annual values for each raster stack over the years (1995 to 2024)
+ppt_raster_avg <- calc(stack(ppt_rasters), fun = mean, na.rm = TRUE)
+pet_raster_avg <- calc(stack(pet_rasters), fun = mean, na.rm = TRUE)
+
+# Convert to data frames
+ppt_df <- rasterToPoints(ppt_raster_avg) %>% as.data.frame() %>% rename(precipitation = layer)
+pet_df <- rasterToPoints(pet_raster_avg) %>% as.data.frame() %>% rename(evapotranspiration = layer)
+
+# Merge precipitation and evapotranspiration data
+ai_df <- left_join(ppt_df, pet_df, by = c("x", "y"))
+
+# Calculate the aridity index
+ai_df <- ai_df %>% mutate(aridity_index = precipitation / evapotranspiration)
+
+# Categorize aridity
+ai_df <- ai_df %>% mutate(category = case_when(
+  is.infinite(aridity_index) ~ 'Humid',
+  aridity_index >= 0.65 ~ 'Humid',
+  aridity_index >= 0.5 & aridity_index < 0.65 ~ 'Dry sub-humid',
+  aridity_index >= 0.2 & aridity_index < 0.5 ~ 'Semi-arid',
+  aridity_index >= 0.05 & aridity_index < 0.2 ~ 'Arid',
+  aridity_index < 0.05 ~ 'Hyper-arid'
+)) %>% mutate(category = factor(category, levels = c('Hyper-arid', 'Arid', 'Semi-arid', 'Dry sub-humid', 'Humid'), ordered = TRUE))
+
+# Plot the final average aridity index
+ggplot() +
+  geom_raster(data = ai_df, aes(x = x, y = y, fill = category)) +
+  geom_sf(data = australia_states, fill = NA, color = "black", size = 1) +
+  scale_fill_manual(values = c('Hyper-arid' = '#d73027', 'Arid' = '#fc8d59', 'Semi-arid' = '#fee08b', 'Dry sub-humid' = '#d9ef8b', 'Humid' = '#1a9850'), guide = guide_legend(reverse = TRUE)) +
+  theme_void(base_size = 18) +
+  theme(legend.title = element_blank())
+
+```
+
+
+
+years <- c(seq(1995, 2015, by = 5), 2020, 2024)
+```{r}
+# Load required libraries
+library(ggplot2)
+library(sf)
+library(ggspatial)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(dplyr)
+library(terra)
+library(raster)  # Needed for raster math operations
+library(purrr)
+
+# Load sightings data, removing NA values
+sightings <- read.csv("~/Desktop/phd/ARFN/SSD/occurance_records.csv") %>%
+  filter(!is.na(longitude), !is.na(latitude))
+
+# Convert sightings to sf object
+sightings_sf <- st_as_sf(sightings, coords = c("longitude", "latitude"), crs = 4326)
+
+# Study site coordinates
+sites <- data.frame(
+  name = c("Muloorina Station", "Sturt National Park", "Kinchega National Park", "Ngarkat Conservation Park"),
+  lat = c(-29.14, -29.05, -32.32, -35.43),
+  lon = c(137.54, 141.30, 142.17, 140.36)
+)
+
+sites_sf <- st_as_sf(sites, coords = c("lon", "lat"), crs = 4326)
+
+# Load Australia map
+australia <- ne_countries(country = "Australia", scale = "medium", returnclass = "sf")
+australia_states <- ne_states(country = "Australia", returnclass = "sf")
+
+# Define study area bounding box
+study_bbox <- st_bbox(sightings_sf)  # Get bounding box from sightings
+
+# Define study area extent for cropping
+study_extent <- extent(c(study_bbox$xmin, study_bbox$xmax, study_bbox$ymin, study_bbox$ymax))
+
+# Download and process TerraClimate data
+years <- c(seq(from = 1995, to = 2024))
+
+# Construct URLs and destination filenames for ppt and pet
+download_data <- function(var, years) {
+  lead <- paste0('http://thredds.northwestknowledge.net:8080/thredds/fileServer/TERRACLIMATE_ALL/data/TerraClimate_', var, '_')
+  urls <- paste0(lead, years, '.nc')
+  destfiles <- paste0('TerraClimate_', var, '_', years, '.nc')
+  map2(.x = urls, .y = destfiles, ~ download.file(url = .x, destfile = .y, method = 'curl'))
+  return(destfiles)
+}
+```
+
+
+```{r}
+ppt_files <- download_data('ppt', years)
+pet_files <- download_data('pet', years)
+```
+
+
+```{r}
+# Load raster stacks
+ppt_rasters <- map(.x = ppt_files, ~ stack(.x))
+pet_rasters <- map(.x = pet_files, ~ stack(.x))
+
+# Crop to study area
+ppt_rasters <- map(.x = ppt_rasters, ~ crop(.x, study_extent))
+pet_rasters <- map(.x = pet_rasters, ~ crop(.x, study_extent))
+
+# Compute mean annual values
+ppt_rasters <- map(.x = ppt_rasters, ~ calc(.x, fun = mean, na.rm = TRUE))
+pet_rasters <- map(.x = pet_rasters, ~ calc(.x, fun = mean, na.rm = TRUE))
+
+# Convert raster to dataframe
+ppt_df <- map(.x = ppt_rasters, ~ rasterToPoints(.x) %>% as.data.frame(.) %>% rename(precipitation = layer))
+pet_df <- map(.x = pet_rasters, ~ rasterToPoints(.x) %>% as.data.frame(.) %>% rename(evapotranspiration = layer))
+
+# Join data
+ai_df <- map2(.x = ppt_df, .y = pet_df, ~ left_join(.x, .y))
+ai_df <- map2(.x = ai_df, .y = years, ~ .x %>% mutate(year = as.character(.y)))
+ai_df <- map_df(.x = ai_df, ~ bind_rows(.x))
+
+# Calculate aridity index
+ai_df <- ai_df %>% mutate(aridity_index = precipitation / evapotranspiration)
+
+# Categorize aridity
+ai_df <- ai_df %>% mutate(category = case_when(
+  is.infinite(aridity_index) ~ 'Humid',
+  aridity_index >= 0.65 ~ 'Humid',
+  aridity_index >= 0.5 & aridity_index < 0.65 ~ 'Dry sub-humid',
+  aridity_index >= 0.2 & aridity_index < 0.5 ~ 'Semi-arid',
+  aridity_index >= 0.05 & aridity_index < 0.2 ~ 'Arid',
+  aridity_index < 0.05 ~ 'Hyper-arid'
+)) %>% mutate(category = factor(category, levels = c('Hyper-arid', 'Arid', 'Semi-arid', 'Dry sub-humid', 'Humid'), ordered = TRUE))
+```
+
+
+```{r}
+# Plot aridity index with zoomed-in study area
+ggplot() +
+  geom_raster(data = ai_df, aes(x = x, y = y, fill = category)) +
+  geom_sf(data = australia_states, fill = NA, color = "black", size = 1) +
+  #geom_sf(data = sightings_sf, color = "blue", alpha = 0.2, size = 0.5) +
+  
+  scale_fill_manual(values = c('Hyper-arid' = '#d73027', 'Arid' = '#fc8d59', 'Semi-arid' = '#fee08b', 'Dry sub-humid' = '#d9ef8b', 'Humid' = '#1a9850'), guide = guide_legend(reverse = TRUE)) +
+  coord_sf(xlim = c(study_bbox$xmin, study_bbox$xmax), ylim = c(study_bbox$ymin, study_bbox$ymax)) +
+  theme_void(base_size = 18) +
+  facet_wrap(~year, ncol = 7) +
+  theme(legend.title = element_blank())
+```
+
+
+
+
+```{r}
+library(gganimate)
+
+# Create the animation with year labels
+aridity_animation <- ggplot(ai_df) +
+  geom_raster(aes(x = x, y = y, fill = category)) +
+  geom_sf(data = australia_states, fill = NA, color = "black", size = 1) +
+  scale_fill_manual(values = c('Hyper-arid' = '#d73027', 
+                               'Arid' = '#fc8d59', 
+                               'Semi-arid' = '#fee08b', 
+                               'Dry sub-humid' = '#d9ef8b', 
+                               'Humid' = '#1a9850'), 
+                    guide = guide_legend(reverse = TRUE)) +
+  coord_sf(xlim = c(study_bbox$xmin, study_bbox$xmax), 
+           ylim = c(study_bbox$ymin, study_bbox$ymax)) +
+  theme_void(base_size = 18) +
+  theme(legend.title = element_blank()) +
+  # Add the year label
+  geom_text(data = ai_df %>% distinct(year), aes(x = study_bbox$xmin + 0.1, y = study_bbox$ymax - 0.1, label = as.character(year)),
+            color = "black", size = 6, fontface = "bold", hjust = 0) +
+  geom_text(data = sites, aes(x = lon, y = lat, label = name),color = "black", hjust = -0.1, angle = 10, size = 4) +
+  geom_sf(data = sites_sf, color = "black", size = 2.5) +
+  annotation_scale(location = "bl", width_hint = 0.3) +
+  annotation_north_arrow(location = "tr", which_north = "true", 
+                         style = north_arrow_fancy_orienteering()) +
+  coord_sf(xlim = c(133, 149), ylim = c(-37, -25.5), expand = FALSE) +  # Zoom in
+  # Use transition_states to cycle through the 'year'
+  transition_states(year, transition_length = 2, state_length = 1, wrap = TRUE) +
+  ease_aes('linear')  # For a smooth transition between frames
+
+
+```
+
+```{r}
+# Render the animation
+animate(aridity_animation, nframes = 30, width = 800, height = 600, fps = 1)
+
+
+```
+
+
+```{r}
+anim_save("aridity_animation.gif",animation =last_animation())
+```
+
+
+
+
+## Extract climate data and graph 
+
+```{r}
+# Load required libraries
+library(ncdf4)      # For handling NetCDF files
+library(terra)      # Raster manipulation
+library(dplyr)      # Data wrangling
+library(lubridate)  # Date handling
+library(ggplot2)    # Plotting
+library(tidyr)      # Data transformation
+
+# --- Define Study Sites (Latitude & Longitude) ---
+sites <- data.frame(
+  name = c("Muloorina Station", "Sturt National Park", "Kinchega National Park", "Ngarkat Conservation Park"),
+  lat = c(-29.14, -29.05, -32.32, -35.43),
+  lon = c(137.54, 141.30, 142.17, 140.36)
+)
+
+# --- Function to Download & Extract Site-Specific NetCDF Data ---
+download_and_extract <- function(varname, start_year = 1995, end_year = 2024) {
+  base_url <- "http://thredds.northwestknowledge.net:8080/thredds/fileServer/TERRACLIMATE_ALL/data/"
+  extracted_data <- data.frame()
+
+  for (year in start_year:end_year) {
+    nc_file <- paste0(varname, "_", year, ".nc")
+    url <- paste0(base_url, "TerraClimate_", nc_file)
+    
+    if (!file.exists(nc_file)) {
+      message(paste("Downloading:", nc_file))
+      download.file(url, nc_file, mode = "wb")
+    }
+
+    # Open NetCDF file
+    nc <- nc_open(nc_file)
+    
+    # Get time data
+    time <- ncvar_get(nc, "time")
+    start_date <- as.Date("1900-01-01") + time
+    months <- format(start_date, "%Y-%m")  # Convert to Year-Month format
+
+    # Extract variable data
+    data_array <- ncvar_get(nc, varname)
+    
+    # Get latitude and longitude values
+    lat_vals <- ncvar_get(nc, "lat")
+    lon_vals <- ncvar_get(nc, "lon")
+
+    # Convert to RasterBrick and extract values for study sites
+    raster_stack <- rast(nc_file)
+    site_data <- extract(raster_stack, sites[, c("lon", "lat")], method = "bilinear")
+
+    # Create dataframe for each site
+    for (i in 1:nrow(sites)) {
+      site_df <- data.frame(date = months, value = site_data[, i + 1], site = sites$name[i])
+      extracted_data <- rbind(extracted_data, site_df)
+    }
+
+    nc_close(nc)  # Close NetCDF file
+  }
+  
+  return(extracted_data)
+}
+```
+
+
+```{r}
+library(ncdf4)
+library(terra)
+library(dplyr)
+library(lubridate)
+library(purrr)
+
+# Define study site locations
+sites <- data.frame(
+  name = c("Muloorina Station", "Sturt National Park", "Kinchega National Park", "Ngarkat Conservation Park"),
+  lat = c(-29.14, -29.05, -32.32, -35.43),
+  lon = c(137.54, 141.30, 142.17, 140.36)
+)
+
+extract_from_nc <- function(varname, start_year = 1995, end_year = 2024) {
+  # Pre-allocate list for results
+  all_data <- list()
+  
+  for (year in start_year:end_year) {
+    nc_file <- paste0(varname, "_", year, ".nc")
+    
+    if (!file.exists(nc_file)) {
+      message(paste("Skipping missing file:", nc_file))
+      next
+    }
+    
+    # Open NetCDF file
+    nc <- nc_open(nc_file)
+    
+    # Get proper time information
+    time <- ncvar_get(nc, "time")
+    time_units <- ncatt_get(nc, "time", "units")$value
+    
+    # Parse time units (handles different reference dates)
+    if (grepl("days since", time_units)) {
+      ref_date <- sub("days since ", "", time_units)
+      dates <- as.Date(time, origin = as.Date(ref_date))
+    } else {
+      # Fallback to your original approach if units are different
+      dates <- as.Date("1900-01-01") + time
+    }
+    
+    # Convert to proper date format
+    months <- format(dates, "%Y-%m")
+    
+    # Read data as SpatRaster
+    raster_data <- rast(nc_file)
+    
+    # Extract all points at once
+    site_values <- terra::extract(raster_data, sites[, c("lon", "lat")], method = "bilinear")
+    
+    # Create data frame for this year
+    year_data <- map_dfr(1:nrow(sites), function(i) {
+      data.frame(
+        date = months,
+        value = as.numeric(site_values[i, -1]), # -1 to exclude ID column
+        site = sites$name[i],
+        stringsAsFactors = FALSE
+      )
+    })
+    
+    all_data[[as.character(year)]] <- year_data
+    nc_close(nc)
+  }
+  
+  # Combine all years
+  bind_rows(all_data)
+}
+
+# Parallel processing option (uncomment if you want to use it)
+# library(furrr)
+# plan(multisession) # Use future_map_dfr instead of map_dfr in the function
+
+# Run extractions
+tmax_data <- extract_from_nc("tmax")
+tmin_data <- extract_from_nc("tmin")
+ppt_data <- extract_from_nc("ppt")
+
+# Save results
+write.csv(tmax_data, "tmax_data.csv", row.names = FALSE)
+write.csv(tmin_data, "tmin_data.csv", row.names = FALSE)
+write.csv(ppt_data, "ppt_data.csv", row.names = FALSE)
+
+```
+
+
+
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+
+# Read the CSV files
+tmax_data <- read.csv("tmax_data.csv")
+tmin_data <- read.csv("tmin_data.csv")
+ppt_data  <- read.csv("ppt_data.csv")
+
+# Combine datasets
+climate_data <- bind_rows(
+  tmax_data %>% mutate(variable = "Tmax"),
+  tmin_data %>% mutate(variable = "Tmin")
+ # ppt_data  %>% mutate(variable = "Precipitation")
+)
+
+
+climate_data <- climate_data %>% separate(date, into =c("year", "month"), sep = "-", remove = FALSE)
+climate_data$month <- as.numeric(climate_data$month)
+climate_data$month <- factor(climate_data$month, levels =1:12, labels = month.abb, ordered = TRUE)
+```
+
+
+```{r}
+
+# --- Compute Monthly Means & Standard Deviations for All Years ---
+climate_summary <- climate_data %>%
+  group_by(site, variable, month) %>%
+  summarize(mean_value = mean(value, na.rm = TRUE),  # Average over all years
+            sd_value = sd(value, na.rm = TRUE), .groups = "drop")
+```
+
+
+
+
+
+```{r}
+temp_profile <- ggplot(
+    climate_summary,
+    aes(x = month, y = mean_value,
+        color = site, linetype = variable, group = interaction(site, variable))) +
+  geom_line(size = 0.5) +   
+  geom_point(size = 1) +  
+  geom_errorbar(aes(ymin = mean_value - sd_value,
+                    ymax = mean_value + sd_value),
+                width = 0.2) +  
+  labs(
+    x = "Month", y = expression(Temperature ~(degree *C)),
+    color = "Site",
+    linetype = "Climate Variable"
+  ) +
+  scale_x_discrete(limits = month.abb) +  
+  scale_color_manual(values = c(
+    "Muloorina Station" = "darkred",
+    "Sturt National Park" = "#fc8d59",
+    "Kinchega National Park" = "#4575b4",
+    "Ngarkat Conservation Park" = "#91bfdb"
+  )) + 
+  theme_classic() + 
+  theme(
+    axis.title = element_text(size = 16, colour = "black"),   # black axis titles
+    axis.text  = element_text(size = 14, colour = "black"),   # black tick labels
+    axis.line  = element_line(linewidth = 1.2, colour = "black"),  # thicker axis lines
+    legend.position = "none"
+  )+
+  facet_wrap(~site_group) 
+
+temp_profile
+
+```
+
+
+```{r}
+library(ncdf4)
+library(terra)
+library(dplyr)
+library(lubridate)
+library(purrr)
+
+# ---- Study sites ----
+sites <- data.frame(
+  name = c("Muloorina Station", "Sturt National Park",
+           "Kinchega National Park", "Ngarkat Conservation Park"),
+  lat = c(-29.14, -29.05, -32.32, -35.43),
+  lon = c(137.54, 141.30, 142.17, 140.36)
+)
+
+# ---- Extraction Function ----
+extract_from_nc <- function(varname, start_year = 1995, end_year = 2024) {
+
+  all_data <- list()
+
+  for (year in start_year:end_year) {
+    
+    nc_file <- paste0(varname, "_", year, ".nc")
+    if (!file.exists(nc_file)) {
+      message("Skipping missing file: ", nc_file)
+      next
+    }
+
+    # Open file
+    nc <- nc_open(nc_file)
+
+    # ---- Extract and interpret time ----
+    time <- ncvar_get(nc, "time")
+    units <- ncatt_get(nc, "time", "units")$value
+
+    if (grepl("days since", units)) {
+      origin <- gsub("days since ", "", units)
+      dates <- as.Date(time, origin = origin)
+    } else if (grepl("hours since", units)) {
+      origin <- gsub("hours since ", "", units)
+      dates <- as.POSIXct(time * 3600, origin = origin)
+      dates <- as.Date(dates)
+    } else {
+      stop("Unknown time units: ", units)
+    }
+
+    # ---- Read raster and extract ----
+    r <- rast(nc_file)
+    vals <- terra::extract(r, sites[, c("lon", "lat")], method = "bilinear")
+
+    # Remove ID column
+    vals <- vals[, -1]
+
+    # ---- Build tidy data frame ----
+    df_year <- purrr::map_dfr(seq_len(nrow(sites)), function(i) {
+      tibble(
+        date = dates,
+        value = as.numeric(vals[i, ]),
+        site = sites$name[i]
+      )
+    })
+
+    all_data[[as.character(year)]] <- df_year
+    nc_close(nc)
+  }
+
+  bind_rows(all_data)
+}
+
+```
+
+```{r}
+tmax_data <- extract_from_nc("tmax")
+tmin_data <- extract_from_nc("tmin")
+ppt_data  <- extract_from_nc("ppt")
+
+write.csv(tmax_data, "tmax_data.csv", row.names = FALSE)
+write.csv(tmin_data, "tmin_data.csv", row.names = FALSE)
+
+```
+
+
+
+```{r}
+library(ggridges)
+library(dplyr)
+library(lubridate)
+
+# Define custom ordering
+site_order <- c(
+  "Muloorina Station",
+  "Sturt National Park",
+  "Kinchega National Park",
+  "Ngarkat Conservation Park"
+)
+
+daily_tmax <- tmax_data %>%
+  mutate(
+    month = month(date),
+    year  = year(date),
+    site  = factor(site, levels = site_order)
+  )
+
+ggplot(daily_tmax,
+       aes(x = value, y = site, fill = site)) +
+  geom_density_ridges(alpha = 0.7, scale = 1.9) +
+  labs(x = "Daily Tmax (°C)", y = "Population") +
+  scale_fill_brewer(palette = "Set2") +
+  theme_classic()
+
+```
+
+```{r}
+daily_tmax <- daily_tmax %>%
+  mutate(clade = ifelse(site %in% site_order[1:2], "Northern", "Southern"))
+
+ggplot(daily_tmax,
+       aes(x = value, y = site, fill = site)) +
+  geom_density_ridges(alpha = 0.7, scale = 1.2) +
+  facet_grid(clade ~ ., scales = "free_y", switch = "y") +
+  theme_classic()
+
+```
+
+
+```{r}
+library(fmsb)
+
+seasonal <- climate_summary %>%
+  pivot_wider(names_from = month, values_from = mean) %>%
+  group_by(site) %>%
+  summarize(across(everything(), mean))
+
+radarchart(as.data.frame(seasonal))
+
+
+```
+
+
+
+
+
+
+
+
+
+
+```{r}
+ggsave("~/Desktop/phd/Documents/Chapter_1_Honours/TELO.tiff", temp_profile , width = 11, height = 6, dpi = 300)
+```
+
+
+
+## Tub temperature data
+
+```{r}
+library(tidyverse)
+library(lubridate)
+
+path <- "~/Desktop/phd/Documents/Methods/ibutton_csv"
+
+files <- list.files(path, full.names = TRUE, pattern = "\\.csv$")
+
+ibutton_all <- map_df(files, function(f){
+
+  fname <- basename(f)
+  # remove .csv
+  fname_clean <- str_remove(fname, "\\.csv")
+
+  # split by underscore
+  parts <- str_split(fname_clean, "_", simplify = TRUE)
+
+  room       <- parts[1]   # C1, C2, etc
+  position   <- parts[2]   # back, front
+  treatment  <- parts[3]   # T1, T2, Warm, Cool, etc
+  ID         <- parts[4]   # 293
+
+  # read file (assumes two columns: Reading, Values)
+  dat <- read_csv(f, col_types = cols()) %>%
+    rename(Date = 1, Temperature = 2) %>%
+    mutate(
+      Date = dmy_hm(Date),
+      Room = room,
+      Position = position,
+      Treatment = treatment,
+      ID = ID
+    )
+})
+
+ibutton_all <- ibutton_all %>%
+  mutate(day = date(Date))
+
+
+daily_treatment <- ibutton_all %>%
+  group_by(Treatment, day) %>%
+  summarise(
+    daily_mean = mean(Temperature),
+    daily_min = min(Temperature),
+    daily_max = max(Temperature),
+    .groups = "drop"
+  )
+overall_treatment <- daily_treatment %>%
+  group_by(Treatment) %>%
+  summarise(
+    mean_temp = mean(daily_mean),
+    mean_min = mean(daily_min),
+    mean_max = mean(daily_max)
+  )
+
+```
+
+
+
+
+```{r}
+library(tidyverse)
+library(lubridate)
+ibutton_all <- ibutton_all %>%
+  mutate(Treatment = recode(Treatment,
+                            "T1" = "Warm",
+                            "T2" = "Cool"))
+
+# extract hour of day
+ibutton_hourly <- ibutton_all %>%
+  mutate(hour = hour(Date)) %>%
+  group_by(Treatment, hour) %>%
+  summarise(
+    mean_temp = mean(Temperature),
+    sd_temp   = sd(Temperature),
+    n         = n(),
+    se_temp   = sd_temp / sqrt(n),
+    .groups = "drop"
+  )
+```
+
+
+```{r}
+treat_cols <- c(
+  "Cool" = "#1f77b4",   # blue
+  "Warm" = "#d62728"    # red
+)
+
+ggplot(ibutton_hourly,
+       aes(x = hour, y = mean_temp, colour = Treatment)) +
+  
+  geom_line(size = 1) +
+  geom_point() +
+  
+  geom_errorbar(
+    aes(ymin = mean_temp - se_temp,
+        ymax = mean_temp + se_temp),
+    width = 0.25
+  ) +
+  
+  scale_colour_manual(values = treat_cols) +
+  
+  scale_x_continuous(breaks = seq(0, 23, 2)) +
+  
+  labs(
+    x = "Hour of Day",
+    y = "Temperature (°C)",
+    colour = "Treatment"
+  ) +
+  theme_classic()
+
+```
+
+```{r}
+## IMPORT  body temperature DATA
+
+pictus_daily_bod <- read_csv("~/Desktop/phd/Documents/Chapter 3/Datasheets/pictus_bodytemp_2024.csv")
+pictus_daily_bod$ID <- as.factor(pictus_daily_bod$ID)
+pictus_daily_bod$Treatment <- as.factor(pictus_daily_bod$Treatment)
+
+pictus_daily_bod <- pictus_daily_bod %>%
+  mutate(
+   Hour = hour(Start_Time) + minute(Start_Time)/60 + second(Start_Time)/3600
+  )
+
+calculate_exact_times <- function(data) {
+  data %>%
+    mutate(
+      # Ensure times are in proper format
+      Start_Time = as.POSIXct(Start_Time, format = "%H:%M"),
+      End_time = as.POSIXct(End_time, format = "%H:%M")
+    ) %>%
+    group_by(Session, Date) %>%
+    mutate(
+      # Handle cases where start = end time
+      session_duration = ifelse(
+        Start_Time == End_time,
+        60,  # assume 1 hour if no duration given
+        as.numeric(difftime(End_time, Start_Time, units = "mins"))
+      ),
+      
+      # Calculate order within session (0 to 1)
+      session_min_order = min(Room_order, na.rm = TRUE),
+      session_max_order = max(Room_order, na.rm = TRUE),
+      normalized_order = (Room_order - session_min_order) / 
+                        max(1, (session_max_order - session_min_order)),
+      
+      # Calculate exact time
+      Exact_Time = Start_Time + (normalized_order * session_duration * 60),
+      Hour_exact = hour(Exact_Time) + minute(Exact_Time)/60,
+      
+      # Also create a simple sequential time variable
+      Simple_Hour = hour(Start_Time) + minute(Start_Time)/60 + 
+                   (normalized_order * (session_duration/60))
+    ) %>%
+    ungroup()
+}
+
+# Apply the function
+pictus_daily_bod <- calculate_exact_times(pictus_daily_bod)
+```
+
+
+```{r}
+
+# Individual-level thermal experience
+thermal_summary <- pictus_daily_bod %>%
+  group_by(Treatment, ID) %>%
+  summarise(
+    ind_mean = mean(Body_temp, na.rm = TRUE),
+    ind_min = min(Body_temp, na.rm = TRUE),
+    ind_max = max(Body_temp, na.rm = TRUE),
+    ind_range = ind_max - ind_min,
+    .groups = 'drop'
+  ) %>%
+  group_by(Treatment) %>%
+  summarise(
+    n_individuals = n(),
+    mean_daily_temp = round(mean(ind_mean), 1),
+    mean_min_temp = round(mean(ind_min), 1),
+    mean_max_temp = round(mean(ind_max), 1),
+    mean_thermal_range = round(mean(ind_range), 1),
+    sd_daily_temp = round(sd(ind_mean), 1),
+    .groups = 'drop'
+  )
+
+print(thermal_summary)
+```
+
+
+```{r}
+library(mgcv)
+
+m <- gam(
+  Body_temp ~ Treatment +
+    s(Hour_exact, by = Treatment, k = 5) +
+    s(ID, bs = "re"),
+  data = pictus_daily_bod,
+  method = "REML"
+)
+summary(m)
+gam.check(m)
+
+```
+
+```{r}
+# GAM model summary
+gam_results <- summary(m)
+
+cat("GAM MODEL SUMMARY - Treatment Effectiveness Evidence\n")
+cat("===================================================\n")
+cat("Deviance explained:", round(gam_results$dev.expl * 100, 1), "%\n")
+cat("Adjusted R-squared:", round(gam_results$r.sq, 3), "\n")
+cat("Sample size: n =", gam_results$n, "\n\n")
+
+cat("SMOOTH TERMS - Pattern Differences:\n")
+cat("Treatment 1 smooth (edf):", round(gam_results$s.table[1, "edf"], 2), "\n")
+cat("Treatment 2 smooth (edf):", round(gam_results$s.table[2, "edf"], 2), "\n")
+cat("→ Different complexities suggest distinct temporal patterns\n")
+```
+
+
+
+
+```{r}
+# Create prediction data
+new_data <- expand.grid(
+  Hour_exact = seq(min(pictus_daily_bod$Hour_exact, na.rm = TRUE), 
+             max(pictus_daily_bod$Hour_exact, na.rm = TRUE), 
+             length = 100),
+  Treat_Clade = unique(pictus_daily_bod$Treat_Clade),
+  ID = pictus_daily_bod$ID[1]  # Reference individual
+)
+
+# Ensure factor levels match
+new_data$Treat_Clade <- factor(new_data$Treat_Clade, 
+                               levels = levels(pictus_daily_bod$Treat_Clade))
+new_data$ID <- factor(new_data$ID, levels = levels(pictus_daily_bod$ID))
+
+# Get predictions
+pred <- predict(m_flexible, newdata = new_data, se.fit = TRUE, exclude = "s(ID)")
+
+# Add predictions to new_data
+new_data$fit <- pred$fit
+new_data$se <- pred$se.fit
+new_data$lower <- new_data$fit - 1.96 * new_data$se
+new_data$upper <- new_data$fit + 1.96 * new_data$se
+
+# Split the Treat_Clade back into separate columns for better plotting
+new_data$Treatment <- sub("\\..*", "", new_data$Treat_Clade)
+new_data$Clade <- sub(".*\\.", "", new_data$Treat_Clade)
+
+# Do the same for original data for points
+pictus_daily_bod$Treatment_plot <- sub("\\..*", "", pictus_daily_bod$Treat_Clade)
+pictus_daily_bod$Clade_plot <- sub(".*\\.", "", pictus_daily_bod$Treat_Clade)
+```
+
+
+```{r}
+# === CUSTOMIZE THESE VALUES ===
+treatment_names <- c("1" = "Warm Treatment",  # Change "1" to your desired name
+                     "2" = "Cool Treatment")   # Change "2" to your desired name
+
+treatment_colors <- c("1" = "#9E2A2F",        # Change color for Treatment 1 (Sea Green)
+                      "2" = "#4A90E2")        # Change color for Treatment 2 (Crimson)
+
+
+plot_title <- "Body Temperature Patterns Throughout the Day"
+plot_subtitle <- "Cool and Warm treatments produce distinct thermal trajectories"
+y_axis_label <- "Body Temperature (°C)"
+# === END CUSTOMIZATION ===
+```
+
+
+```{r}
+# Create the plot with customizable elements
+body_temp_graph <- ggplot(new_data, aes(x = Hour_exact, y = fit, 
+                     color = Treatment, fill = Treatment)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, color = NA) +
+  geom_line(size = 1) +
+  geom_point(data = pictus_daily_bod, 
+             aes(x = Hour_exact, y = Body_temp, color = Treatment),
+             alpha = 0.3, size = 1) +
+  scale_color_manual(values = treatment_colors,
+                     labels = treatment_names) +
+  scale_fill_manual(values = treatment_colors,
+                    labels = treatment_names) +
+  labs(
+    x = "Time of Day (Hours)",
+    y = y_axis_label,
+    color = "Treatment",
+    fill = "Treatment"
+  ) +
+   facet_wrap(~ Clade, ncol = 2) +
+  theme_classic() +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(size = 11)
+  )
+body_temp_graph
+```
+```{r}
+ggsave("~/Desktop/phd/Documents/Chapter_1_Honours/TELO.tiff", body_temp_graph, width = 4, height = 3, dpi = 300)
+```
+
+
+
+
+
+
+
+
+
+
+```{r}
+## IMPORT DATA
+pictus_basking <- read_csv("~/Desktop/phd/Documents/Chapter 3/Datasheets/pictus_basking_data_2024.csv")
+pictus_basking$ID <- as.factor(pictus_basking$ID)
+pictus_basking$treatment <- as.factor(pictus_basking$treatment)
+pictus_basking$BASKING_SCORE<- as.numeric(pictus_basking$BASKING_SCORE)
+pictus_basking <- pictus_basking %>%
+  mutate(
+   Hour = hour(time_start) + minute(time_start)/60 + second(time_start)/3600
+  )
+
+```
+
+
+```{r}
+pictus_mean_basking <- pictus_basking %>%
+  group_by(treatment, clade) %>%
+  summarize(
+    Mean_bask = mean(BASKING_SCORE  , na.rm = TRUE),
+    SE_bask = sd(BASKING_SCORE  , na.rm = TRUE) / sqrt(sum(!is.na(BASKING_SCORE)))
+  )
+```
+
+
+```{r}
+library(mgcv)
+
+mb <- gam(
+  BASKING_SCORE ~ treatment +
+    s(Hour, by = treatment, k = 10) +
+    s(ID, bs = "re"),
+  data = pictus_basking,
+  method = "REML"
+)
+summary(mb)
+
+```
+
+```{r}
+library(gratia)
+library(ggplot2)
+
+# Create prediction data
+new_data <- with(pictus_basking, 
+                 expand.grid(Hour = seq(min(Hour), max(Hour), length = 100),
+                             treatment = unique(treatment),
+                             ID = levels(ID)[1]))  # Use a reference ID
+
+# Get predictions
+pred <- predict(mb, newdata = new_data, se.fit = TRUE, exclude = "s(ID)")
+
+# Add to new_data
+new_data$fit <- pred$fit
+new_data$se <- pred$se.fit
+new_data$lower <- new_data$fit - 1.96 * new_data$se
+new_data$upper <- new_data$fit + 1.96 * new_data$se
+
+# Plot
+ggplot(new_data, aes(x = Hour, y = fit, color = treatment, fill = treatment)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, color = NA) +
+  geom_line(size = 1) +
+  geom_jitter(data = pictus_basking, 
+              aes(x = Hour, y = BASKING_SCORE, color = treatment),
+              alpha = 0.3, size = 1, width = 0.1, height = 0) +
+  labs(y = "Basking probability") +
+  theme_minimal()
+```
+
+
+
+

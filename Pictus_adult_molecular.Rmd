@@ -1,0 +1,1246 @@
+---
+title: "Pictus_adult_molecular"
+output: html_document
+---
+---
+title: "PICTUS_ADULT_MOLECULAR"
+author: "Daniel Ritchie"
+date: "2025-02-19"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+```{r}
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(lme4)
+library(dplyr)
+library(rptR)
+library(lmPerm)
+library(rptR)
+```
+
+```{r}
+## IMPORT DATA
+pictus_SC_TELO <- read_csv("~/Desktop/Pictus 2024 ADULTS/Excel files/TELB/DJR c,pictus STANDARD CURVE 10 2024.csv")
+
+saveRDS(pictus_SC_TELO, file.path("input", "pictus_SC_TELO.rds"))
+
+pictus_SC_TELO <-readRDS("input/pictus_SC_TELO.rds")
+```
+
+```{r}
+# Calculate R-squared values for each group
+r2_data <- data.frame(
+  group = c("18s", "TELB"),
+  r2 = c(0.99, 0.99) # Replace with your actual R² values
+)
+
+```
+
+```{r}
+## Graph of body temp and O2 by pop
+pictus_SC_TELO_graph <- ggplot(pictus_SC_TELO, aes(x = log(`Given conc`), y= Cq, shape= Primer))+
+   geom_point(size = 2, alpha = 0.8, color = "black", fill = "white") +  # Use color and fill for outline
+  scale_shape_manual(values = c("Telb" = 21, "18s" = 24)) + 
+  stat_smooth(method = "lm", se =FALSE, colour ="black", linewidth =0.7)+
+geom_text(
+    data = r2_data,
+    aes(
+      x = 2, y = c(24, 17), # Adjust positions for each group
+      label = paste0("R² = ", r2)
+    ),
+    inherit.aes = FALSE,
+    size = 4
+  ) +
+  xlab("log(Relative DNA concentration)")+
+  theme_classic()
+pictus_SC_TELO_graph
+```
+
+```{r}
+ggsave("plots/SC_CHAPTER3.png", pictus_SC_TELO_graph,
+  width = 10,
+  height = 10,
+  units = "cm")
+```
+
+
+```{r}
+## IMPORT DATA
+pictus_SC_TERT <- read_csv("~/Desktop/phd/Documents/Chapter 3/Datasheets/DJR_SC_Final.csv")
+
+saveRDS(pictus_SC_TERT, file.path("input", "pictus_SC_TERT.rds"))
+
+pictus_SC_TERT <-readRDS("input/pictus_SC_TERT.rds")
+```
+
+```{r}
+# Calculate R-squared values for each group
+r2_data <- data.frame(
+  group = c("GAPDH", "TERT"),
+  r2 = c(0.99, 0.99) # Replace with your actual R² values
+)
+
+```
+
+```{r}
+## Graph of body temp and O2 by pop
+pictus_SC_TERT_graph <- ggplot(pictus_SC_TERT, aes(x = log(`Given conc`), y= Cq, shape= Primer))+
+   geom_point(size = 2, alpha = 0.8, color = "black", fill = "white") +  # Use color and fill for outline
+  scale_shape_manual(values = c("TERT" = 21, "GAPDH" = 24)) + 
+  stat_smooth(method = "lm", se =FALSE, colour ="black", linewidth =0.7)+
+
+  xlab("log(Relative DNA concentration)")+
+  theme_classic()
+pictus_SC_TERT_graph
+```
+```{r}
+ggsave("SCTERT_CHAPTER3.png", pictus_SC_TERT_graph,
+  width = 10,
+  height = 8,
+  units = "cm")
+```
+
+
+```{r}
+## IMPORT DATA
+pictus_GS_adult <- read_csv("~/Desktop/phd/Documents/Chapter 3/Datasheets/Adult_2024_GS.csv")
+
+saveRDS(pictus_GS_adult, file.path("input", "pictus_GS_adult.rds"))
+
+pictus_GS_adult <-readRDS("input/pictus_GS_adult.rds")
+```
+
+```{r}
+
+library(irr)
+
+# Separate Telomere and 18s data
+telomere_data <- pictus_GS_adult[pictus_GS_adult$Amplicon == "TELB", c("Rep.1", "Rep.2", "Rep.3", "Rep.4")]
+s18_data <- pictus_GS_adult[pictus_GS_adult$Amplicon == "18s", c("Rep.1", "Rep.2", "Rep.3", "Rep.4")]
+
+# Quick CV calculations only
+telomere_intra <- mean(apply(telomere_data, 1, function(x) sd(x, na.rm=TRUE)/mean(x, na.rm=TRUE)*100), na.rm=TRUE)
+telomere_inter <- sd(rowMeans(telomere_data, na.rm=TRUE), na.rm=TRUE)/mean(rowMeans(telomere_data, na.rm=TRUE), na.rm=TRUE)*100
+
+s18_intra <- mean(apply(s18_data, 1, function(x) sd(x, na.rm=TRUE)/mean(x, na.rm=TRUE)*100), na.rm=TRUE)
+s18_inter <- sd(rowMeans(s18_data, na.rm=TRUE), na.rm=TRUE)/mean(rowMeans(s18_data, na.rm=TRUE), na.rm=TRUE)*100
+
+cat("Telomere - Intra:", round(telomere_intra, 2), "%  Inter:", round(telomere_inter, 2), "%\n")
+cat("18s      - Intra:", round(s18_intra, 2), "%  Inter:", round(s18_inter, 2), "%\n")
+
+```
+
+```{r}
+## IMPORT DATA
+pictus_GS_TERT_adult <- read_csv("~/Desktop/phd/Documents/Chapter 3/Datasheets/Adult_2024_TERT_GS.csv")
+
+saveRDS(pictus_GS_TERT_adult, file.path("input", "pictus_GS_TERT_adult.rds"))
+
+pictus_GS_TERT_adult <-readRDS("input/pictus_GS_TERT_adult.rds")
+```
+
+```{r}
+
+
+library(irr)
+
+TERT_data <- pictus_GS_TERT_adult[pictus_GS_TERT_adult$Amplicon == "TERT", c("Rep.1", "Rep.2", "Rep.3")]
+GAPDH_data <- pictus_GS_TERT_adult[pictus_GS_TERT_adult$Amplicon == "GAPDH", c("Rep.1", "Rep.2", "Rep.3")]
+
+
+# 1. INTRA-ASSAY CV (within each run)
+
+
+# GAPDH
+gapdh_intra_cv <- mean(apply(GAPDH_data, 1, function(x) {
+  sd(x, na.rm = TRUE) / mean(x, na.rm = TRUE) * 100
+}), na.rm = TRUE)
+
+# TERT
+tert_intra_cv <- mean(apply(TERT_data, 1, function(x) {
+  sd(x, na.rm = TRUE) / mean(x, na.rm = TRUE) * 100
+}), na.rm = TRUE)
+
+
+# 2. INTER-ASSAY CV (across runs)
+
+
+# GAPDH
+gapdh_means <- rowMeans(GAPDH_data, na.rm = TRUE)
+gapdh_inter_cv <- sd(gapdh_means, na.rm = TRUE) / mean(gapdh_means, na.rm = TRUE) * 100
+
+# TERT
+tert_means <- rowMeans(TERT_data, na.rm = TRUE)
+tert_inter_cv <- sd(tert_means, na.rm = TRUE) / mean(tert_means, na.rm = TRUE) * 100
+
+
+# 3. PRINT RESULTS
+
+cat("\n===============================\n")
+cat("    qPCR REPRODUCIBILITY\n")
+cat("===============================\n\n")
+
+cat("GAPDH:\n")
+cat(sprintf("  Intra-assay CV:  %.2f%%\n", gapdh_intra_cv))
+cat(sprintf("  Inter-assay CV:  %.2f%%\n\n", gapdh_inter_cv))
+
+cat("TERT:\n")
+cat(sprintf("  Intra-assay CV:  %.2f%%\n", tert_intra_cv))
+cat(sprintf("  Inter-assay CV:  %.2f%%\n\n", tert_inter_cv))
+
+
+```
+
+
+
+
+
+```{r}
+## IMPORT DATA
+pictus_IQ_TERT <- read_csv("~/Desktop/phd/Documents/Chapter 3/Datasheets/Pictus_Qubit_IQ.csv")
+
+saveRDS(pictus_IQ_TERT, file.path("input", "pictus_IQ_TERT.rds"))
+
+pictus_IQ_TERT <-readRDS("input/pictus_IQ_TERT.rds")
+```
+
+```{r}
+JAN_IQ_model <- lmer(Jan_IQ ~Treatment*Clade +(1|Population) , data =pictus_IQ_TERT)
+
+summary(JAN_IQ_model)
+anova(JAN_IQ_model)
+
+#emmeans(change_model, pairwise ~ Treatment*Clade)
+```
+
+```{r}
+library(ggplot2)
+
+## one position object for everything
+pd  <- position_dodge(width = 0.7)                       # for the boxes
+pjd <- position_jitterdodge(dodge.width = 0.7,           # for the points
+                            jitter.width = 0.15)
+
+IQ_boxplot_JAN <- ggplot(pictus_IQ_TERT ,
+       aes(x = Clade,
+           y = Jan_IQ,
+           fill = Treatment)) +          # fill = interior colour
+  geom_boxplot(width = 0.6,
+               position = pd,
+               outlier.shape = NA) +
+ geom_point(position = pjd,
+           size      = 1.8,
+           alpha     = 0.4,
+           colour    = "black",   
+           shape     = 16)   +    
+
+  scale_fill_manual(values = c(Warm = "#9E2A2F",
+                               Cool = "#4A90E2")) +
+  labs(x = "Clade", y = "Inital RNA IQ") +
+  theme_classic() +
+  theme(
+    axis.title = element_text(size = 16, colour = "black"),   # black axis titles
+    axis.text  = element_text(size = 14, colour = "black"),   # black tick labels
+    axis.line  = element_line(linewidth = 1.2, colour = "black"),  # thicker axis lines
+    legend.position = "none"
+  )
+IQ_boxplot_JAN
+```
+
+```{r}
+May_IQ_model <- lmer(May_IQ ~Treatment*Clade +(1|Population) , data =pictus_IQ_TERT)
+
+summary(May_IQ_model)
+anova(May_IQ_model)
+
+#emmeans(change_model, pairwise ~ Treatment*Clade)
+```
+
+```{r}
+library(ggplot2)
+
+## one position object for everything
+pd  <- position_dodge(width = 0.7)                       # for the boxes
+pjd <- position_jitterdodge(dodge.width = 0.7,           # for the points
+                            jitter.width = 0.15)
+
+IQ_boxplot_MAY <- ggplot(pictus_IQ_TERT ,
+       aes(x = Clade,
+           y = May_IQ,
+           fill = Treatment)) +          # fill = interior colour
+  geom_boxplot(width = 0.6,
+               position = pd,
+               outlier.shape = NA) +
+ geom_point(position = pjd,
+           size      = 1.8,
+           alpha     = 0.4,
+           colour    = "black",   
+           shape     = 16)   +    
+
+  scale_fill_manual(values = c(Warm = "#9E2A2F",
+                               Cool = "#4A90E2")) +
+  labs(x = "Clade", y = "Final RNA IQ") +
+ theme_classic() +
+  theme(
+    axis.title = element_text(size = 16, colour = "black"),   # black axis titles
+    axis.text  = element_text(size = 14, colour = "black"),   # black tick labels
+    axis.line  = element_line(linewidth = 1.2, colour = "black"),  # thicker axis lines
+    legend.position = "none"
+  )
+IQ_boxplot_MAY
+```
+
+
+```{r}
+iq.figure <- ggpubr::ggarrange(   IQ_boxplot_JAN,IQ_boxplot_MAY,
+                                         ncol = 2, nrow = 1,
+                                         widths = c(10, 10),
+                                         heights = c(10, 10))  +
+  annotate("text", x = c(0.024,  0.5), y = c(0.98,  0.98), label = c("A)", "B)"),
+           size = 4, fontface = "bold")
+
+iq.figure 
+
+```
+
+
+```{r}
+ggsave("plots/IQ.tiff", iq.figure , width = 6, height = 4, dpi = 300)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+## IMPORT DATA
+pictus_ADULT_TELO <- read_csv("~/Desktop/phd/Documents/Chapter 3/Datasheets/ADULT_TELO_FULL.csv")
+
+saveRDS(pictus_ADULT_TELO, file.path("input", "pictus_ADULT_TELO.rds"))
+
+pictus_ADULT_TELO <-readRDS("input/pictus_ADULT_TELO.rds")
+
+pictus_ADULT_TELO <- pictus_ADULT_TELO %>%
+  mutate(
+    Membrane_poten_Jan = MTO_JAN / MTG_JAN,
+    Membrane_poten_May = MTO_MAY / MTG_MAY,
+    Membrane_poten_Change = (MTO_MAY / MTG_MAY) - (MTO_JAN / MTG_JAN)
+  )
+pictus_ADULT_TELO <- pictus_ADULT_TELO %>%
+  mutate(
+    Superoxide_Jan = MSR_JAN / MTG_JAN,
+    Superoxide_May = MSR_MAY / MTG_MAY,
+    Superoxide_Change = (MSR_MAY / MTG_MAY) - (MSR_JAN / MTG_JAN),
+    Density_Change =(MTG_MAY-MTG_JAN)
+  )
+
+
+
+# 1. Put Mass + SVL into long format
+pictus_long <- pictus_ADULT_TELO %>%
+  dplyr::select(ID, Population,
+         Mass_JAN, SVL_JAN,
+         Mass_MAY, SVL_MAY) %>%
+  pivot_longer(cols = c(Mass_JAN, SVL_JAN, Mass_MAY, SVL_MAY),
+               names_to = c("Trait", "Month"),
+               names_pattern = "(.*)_(JAN|MAY)",
+               values_to = "Value") %>%
+  pivot_wider(names_from = Trait, values_from = Value)
+
+# 2. Calculate BCI per Population × Month
+BCI_data <- pictus_long %>%
+  mutate(lnMass = log(Mass),
+         lnSVL  = log(SVL)) %>%
+  group_by(Population, Month) %>%
+  group_modify(~ {
+    df <- .x %>% filter(!is.na(lnMass), !is.na(lnSVL))
+    fit <- lm(lnMass ~ lnSVL, data = df)
+    df$BCI_raw <- residuals(fit)
+    df$BCI <- as.numeric(scale(df$BCI_raw))
+    df
+  }) %>%
+  ungroup()
+
+# 3. Go back to wide format with both raw + standardized residuals
+BCI_wide <- BCI_data %>%
+   dplyr::select(ID, Population, Month, BCI_raw, BCI) %>%
+  pivot_wider(names_from = Month,
+              values_from = c(BCI_raw, BCI),
+              names_sep = "_")
+
+# 4. Join back to main dataset
+pictus_ADULT_TELO <- pictus_ADULT_TELO %>%
+  left_join(BCI_wide, by = c("ID", "Population"))
+
+## Create D for SVL
+Xi <- pictus_ADULT_TELO$SVL_JAN       # baseline RTL
+X2 <- pictus_ADULT_TELO$SVL_MAY       # follow-up RTL
+
+S1 <- sd(Xi, na.rm = TRUE)
+S2 <- sd(X2, na.rm = TRUE)
+r <- cor(Xi, X2, use = "complete.obs")
+p <- r * S2 / S1
+D_SVL <- p * (Xi - mean(Xi, na.rm = TRUE)) - (X2 - mean(X2, na.rm = TRUE))
+pictus_ADULT_TELO$D_SVL <- D_SVL
+
+## Create D for MASS
+Xi <- pictus_ADULT_TELO$Mass_JAN       # baseline RTL
+X2 <- pictus_ADULT_TELO$Mass_MAY       # follow-up RTL
+
+S1 <- sd(Xi, na.rm = TRUE)
+S2 <- sd(X2, na.rm = TRUE)
+r <- cor(Xi, X2, use = "complete.obs")
+p <- r * S2 / S1
+D_Mass <- p * (Xi - mean(Xi, na.rm = TRUE)) - (X2 - mean(X2, na.rm = TRUE))
+pictus_ADULT_TELO$D_Mass <- D_Mass
+
+
+## Create D for BCI
+Xi <- pictus_ADULT_TELO$BCI_JAN      # baseline RTL
+X2 <- pictus_ADULT_TELO$BCI_MAY      # follow-up RTL
+
+S1 <- sd(Xi, na.rm = TRUE)
+S2 <- sd(X2, na.rm = TRUE)
+r <- cor(Xi, X2, use = "complete.obs")
+p <- r * S2 / S1
+D_BCI <- p * (Xi - mean(Xi, na.rm = TRUE)) - (X2 - mean(X2, na.rm = TRUE))
+pictus_ADULT_TELO$D_BCI <- D_BCI
+
+## Create D for rTL
+Xi <- pictus_ADULT_TELO$JAN_RTL       # baseline RTL
+X2 <- pictus_ADULT_TELO$MAY_RTL       # follow-up RTL
+
+S1 <- sd(Xi, na.rm = TRUE)
+S2 <- sd(X2, na.rm = TRUE)
+r <- cor(Xi, X2, use = "complete.obs")
+p <- r * S2 / S1
+D_RTL <- p * (Xi - mean(Xi, na.rm = TRUE)) - (X2 - mean(X2, na.rm = TRUE))
+pictus_ADULT_TELO$D_RTL <- D_RTL
+
+## Create D for TERT
+Xi <- pictus_ADULT_TELO$JAN       # baseline RTL
+X2 <- pictus_ADULT_TELO$MAY       # follow-up RTL
+
+S1 <- sd(Xi, na.rm = TRUE)
+S2 <- sd(X2, na.rm = TRUE)
+r <- cor(Xi, X2, use = "complete.obs")
+p <- r * S2 / S1
+D_TERT <- p * (Xi - mean(Xi, na.rm = TRUE)) - (X2 - mean(X2, na.rm = TRUE))
+pictus_ADULT_TELO$D_TERT <- D_TERT
+
+## Create D for Superoxide
+Xi <- pictus_ADULT_TELO$Superoxide_Jan      # baseline RTL
+X2 <- pictus_ADULT_TELO$Superoxide_May       # follow-up RTL
+
+S1 <- sd(Xi, na.rm = TRUE)
+S2 <- sd(X2, na.rm = TRUE)
+r <- cor(Xi, X2, use = "complete.obs")
+p <- r * S2 / S1
+D_superoxide <- p * (Xi - mean(Xi, na.rm = TRUE)) - (X2 - mean(X2, na.rm = TRUE))
+pictus_ADULT_TELO$D_superoxide <- D_superoxide
+
+## Create D for Membrane Potential
+Xi <- pictus_ADULT_TELO$Membrane_poten_Jan
+X2 <- pictus_ADULT_TELO$Membrane_poten_May
+S1 <- sd(Xi, na.rm = TRUE)
+S2 <- sd(X2, na.rm = TRUE)
+r <- cor(Xi, X2, use = "complete.obs")
+p <- r * S2 / S1
+D_membrane_poten <- p * (Xi - mean(Xi, na.rm = TRUE)) - (X2 - mean(X2, na.rm = TRUE))
+pictus_ADULT_TELO$D_membrane_poten <- D_membrane_poten
+
+
+pictus_ADULT_TELO <- pictus_ADULT_TELO %>%
+  mutate(MTG_JAN_sc = scale(MTG_JAN))
+pictus_ADULT_TELO <- pictus_ADULT_TELO %>%
+  mutate(MTG_MAY_sc = scale(MTG_MAY))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+library(ggplot2)
+
+pd  <- position_dodge(width = 0.8) 
+pjd <- position_jitterdodge(dodge.width = 0.8, jitter.width = 0.05)
+
+telo_plot <- ggplot(pictus_ADULT_TELO,
+       aes(x = Clade,
+           y = log(MAY_RTL_NEW),
+           fill = Treatment,
+           shape = Treatment)) +     
+  # jittered points
+  geom_point(position = pjd,
+             size      = 2.5,
+             alpha     = 0.2,
+             colour    = "black") +
+
+  # mean ± SE
+  stat_summary(
+    aes(fill = Treatment),   # map fill to treatment
+    fun.data = mean_se,
+    geom = "errorbar",
+    size = 2,
+    width = 0,
+    position = pd
+  ) +
+  stat_summary(
+    aes(fill = Treatment),   # mean point with treatment color
+    fun = mean,
+    geom = "point",
+    shape = 21,              # filled circle
+    size = 3,
+    colour = "black",        # outline
+    position = pd
+  ) +
+
+  annotate("text", x =0.825, y = 1, label = "a", size = 6, color = "black") + 
+annotate("text", x =1.175, y = 1, label = "b", size = 6, color = "black") + 
+  annotate("text", x =1.825, y = 1, label = "ab", size = 6, color = "black") + 
+  annotate("text", x =2.175, y = 1, label = "ab", size = 6, color = "black") + 
+  scale_shape_manual(values = c(16, 17)) +
+  scale_fill_manual(values = c(Warm = "#9E2A2F",
+                               Cool = "#4A90E2")) +
+  labs(x = "Clade", y = "log(Final rTL)") +
+  theme_classic() +
+  theme(
+    axis.title = element_text(size = 16, colour = "black"),   # black axis titles
+    axis.text  = element_text(size = 14, colour = "black"),   # black tick labels
+    axis.line  = element_line(linewidth = 1.2, colour = "black"),  # thicker axis lines
+    legend.position = "none"
+  )
+
+telo_plot
+
+```
+
+```{r}
+ggsave("plots/telo_plot.tiff", telo_plot, width = 4, height = 3, dpi = 300)
+```
+
+
+
+## TElomere change model
+
+
+
+
+```{r}
+change_model <- lmer(log(MAY_RTL_NEW) ~ log(JAN_RTL_NEW) +Treatment*Clade +(1|Population) , data =pictus_ADULT_TELO)
+summary(change_model)
+anova(change_model)
+emmeans(change_model, pairwise ~ Clade*Treatment)
+icc(change_model)
+```
+
+
+```{r}
+library(performance)
+check_model(change_model)
+```
+
+
+```{r}
+library(MuMIn)
+r.squaredGLMM(change_model)
+```
+
+```{r}
+library(lme4)
+library(lmerTest)   # adds p‑values & df
+library(DHARMa)     # optional but recommended
+
+
+## diagnostics
+simulateResiduals(change_model) |> plot()
+
+```
+
+```{r}
+library(dplyr)
+library(effectsize)
+library(boot)
+
+# Log-transform MAY_RTL
+df <- d_params
+  
+#Filter out NAs for Treatment
+df_trt <- df %>%
+  filter(!is.na(breadth) & !is.na(Treatment))
+
+# Split groups
+x_trt <- df_trt$breadth[df_trt$Treatment == "Warm"]
+y_trt <- df_trt$breadth[df_trt$Treatment == "Cool"]
+
+# Cohen's d
+d_trt <- cohens_d(x_trt, y_trt, pooled_sd = TRUE)
+d_trt
+# Bootstrap function
+boot_trt_fun <- function(data, indices) {
+  x <- data$breadth[data$Treatment == "Warm"][indices]
+  y <- data$breadth[data$Treatment == "Cool"][indices]
+  cohens_d(x, y, pooled_sd = TRUE)$Cohens_d
+}
+
+set.seed(123)
+boot_trt <- boot(df_trt, statistic = boot_trt_fun, R = 3000)
+```
+
+
+```{r}
+# 95% CI
+boot.ci(boot_trt, type = "perc")
+# Filter out NAs for Clade
+df_clade <- df %>%
+  filter(!is.na(breadth) & !is.na(Clade))
+
+# Split groups
+x_clade <- df_clade$breadth[df_clade$Clade == "North"]
+y_clade <- df_clade$breadth[df_clade$Clade == "South"]
+
+# Cohen's d
+d_clade <- cohens_d(x_clade, y_clade, pooled_sd = TRUE)
+d_clade
+
+# Bootstrap CI
+boot_clade_fun <- function(data, indices) {
+  x <- data$breadth[data$Clade == "North"][indices]
+  y <- data$breadth[data$Clade == "South"][indices]
+  cohens_d(x, y, pooled_sd = TRUE)$Cohens_d
+}
+
+set.seed(123)
+boot_clade <- boot(df_clade, statistic = boot_clade_fun, R = 3000)
+boot.ci(boot_clade, type = "perc")
+
+```
+
+
+
+
+
+# TELOMERASE EXPRESSION 
+
+
+
+```{r}
+library(ggplot2)
+
+pd  <- position_dodge(width = 0.6) 
+pjd <- position_jitterdodge(dodge.width = 0.6, jitter.width = 0.1)
+
+tert_plot <- ggplot(pictus_ADULT_TELO,
+       aes(x = Clade,
+           y = log(MAY_NEW),
+           fill = Treatment,
+           shape = Treatment)) +     
+
+  # jittered points
+  geom_point(position = pjd,
+             size      = 2.5,
+             alpha     = 0.2,
+             colour    = "black") +
+
+  # mean ± SE
+  stat_summary(
+    aes(fill = Treatment),   # map fill to treatment
+    fun.data = mean_se,
+    geom = "errorbar",
+    width = 0,
+    size=2,
+    position = pd
+  ) +
+  stat_summary(
+    aes(fill = Treatment),   # mean point with treatment color
+    fun = mean,
+    geom = "point",
+    shape = 21,              # filled circle
+    size = 3,
+    colour = "black",        # outline
+    position = pd
+  ) +
+ ylim(-1.1, 2.2)+
+ annotate("text", x =0.825, y = 2, label = "a", size = 6, color = "black") + 
+annotate("text", x =1.175, y = 2, label = "a", size = 6, color = "black") + 
+  annotate("text", x =1.825, y = 2, label = "b", size = 6, color = "black") + 
+  annotate("text", x =2.175, y = 2, label = "b", size = 6, color = "black") + 
+  scale_shape_manual(values = c(16, 17)) +
+  scale_fill_manual(values = c(Warm = "#9E2A2F",
+                               Cool = "#4A90E2")) +
+  labs(x = "Clade", y = "log(TERT expression)") +
+  theme_classic() +
+ theme(
+    axis.title = element_text(size = 16, colour = "black"),   # black axis titles
+    axis.text  = element_text(size = 14, colour = "black"),   # black tick labels
+    axis.line  = element_line(linewidth = 1.2, colour = "black"),  # thicker axis lines
+    legend.position = "none"
+  )
+tert_plot
+
+```
+
+```{r}
+ggsave("plots/tert_plot.tiff", tert_plot, width = 4, height = 3, dpi = 300)
+```
+
+
+
+
+```{r}
+r.squaredGLMM(TERT_change_model)
+```
+
+
+
+```{r}
+TERT_change_model <- lmer(log(MAY_NEW) ~log(JAN_NEW)+Treatment*Clade +(1|Population) , data =pictus_ADULT_TELO)
+
+summary(TERT_change_model)
+anova(TERT_change_model)
+
+lsmeans(TERT_change_model, pairwise ~ Clade)
+```
+
+```{r}
+coef_table <- summary(TERT_change_model)$coefficients
+coef_table
+```
+
+
+```{r}
+corr. <- aovp(MAY ~Treatment*Population , data =pictus_ADULT_TELO)
+
+summary(corr.)
+```
+
+
+```{r}
+corr.JAN.TERT <- cor.test(log(pictus_ADULT_TELO$Superoxide_May), log(pictus_ADULT_TELO$MAY_RTL))
+
+print(corr.JAN.TERT)
+```
+
+
+```{r}
+JANTELOJANTERT <- ggplot(pictus_ADULT_TELO, aes(x = JAN_RTL_NEW, y = MAY_RTL_NEW)) +
+    geom_point() +
+ geom_smooth(method = "lm", se =FALSE, colour="black") +    
+    labs(title = "(f)") +
+
+
+    xlab("log(Final Superoxide)") +
+    ylab("log(Final rTL)") +
+
+    theme_classic()
+
+JANTELOJANTERT
+```
+
+```{r}
+ggsave("plots/JANTELOJANTERT.tiff", JANTELOJANTERT, width = 4, height = 4, dpi = 300)
+```
+
+## Mitochondrial ROS model
+
+
+
+
+```{r}
+r.squaredGLMM(MSR_JAN_model)
+```
+
+
+
+```{r}
+MSR_JAN_model <- lmer(log(Superoxide_May) ~log(Superoxide_Jan)+Treatment*Clade +(1|Population), data =pictus_ADULT_TELO)
+
+summary(MSR_JAN_model)
+anova(MSR_JAN_model)
+
+emmeans(MSR_JAN_model, pairwise ~ Treatment)
+```
+
+```{r}
+corr. <- aovp(Superoxide_May ~Treatment*Population , data =pictus_ADULT_TELO)
+
+summary(corr.)
+```
+
+
+
+
+
+
+```{r}
+library(ggplot2)
+
+pd  <- position_dodge(width = 0.6) 
+pjd <- position_jitterdodge(dodge.width = 0.6, jitter.width = 0.1)
+
+ros_plot <- ggplot(pictus_ADULT_TELO,
+       aes(x = Clade,
+           y = log(Superoxide_May),
+           fill = Treatment,
+           shape = Treatment)) +     
+
+  # jittered points
+  geom_point(position = pjd,
+             size      = 2.5,
+             alpha     = 0.2,
+             colour    = "black") +
+
+  # mean ± SE
+  stat_summary(
+    aes(fill = Treatment),   # map fill to treatment
+    fun.data = mean_se,
+    geom = "errorbar",
+    width = 0,
+    size=2,
+    position = pd
+  ) +
+  stat_summary(
+    aes(fill = Treatment),   # mean point with treatment color
+    fun = mean,
+    geom = "point",
+    shape = 21,              # filled circle
+    size = 3,
+    colour = "black",        # outline
+    position = pd
+  ) +
+  ylim(-2.0, 0.2)+
+annotate("text", x =0.825, y = 0, label = "a", size = 6, color = "black") + 
+annotate("text", x =1.175, y = 0, label = "b", size = 6, color = "black") + 
+  annotate("text", x =1.825, y = 0, label = "a", size = 6, color = "black") + 
+  annotate("text", x =2.175, y = 0, label = "b", size = 6, color = "black") + 
+  scale_shape_manual(values = c(16, 17)) +
+  scale_fill_manual(values = c(Warm = "#9E2A2F",
+                               Cool = "#4A90E2")) +
+  labs(x = "Clade", y = "log(Superoxide)") +
+   theme_classic() +
+  theme(
+    axis.title = element_text(size = 16, colour = "black"),   # black axis titles
+    axis.text  = element_text(size = 14, colour = "black"),   # black tick labels
+    axis.line  = element_line(linewidth = 1.2, colour = "black"),  # thicker axis lines
+    legend.position = "none"
+  )
+
+ros_plot
+
+```
+
+```{r}
+ggsave("plots/ros_plot.tiff", ros_plot, width = 4, height = 3, dpi = 300)
+
+```
+
+
+
+
+
+## Membrane potent model
+
+
+
+```{r}
+r.squaredGLMM(mito_model)
+```
+
+```{r}
+
+mito_model <- lmer(MTG_MAY_sc ~ MTG_JAN_sc+Treatment*Clade +(1|Population), data =pictus_ADULT_TELO)
+
+summary(mito_model)
+anova(mito_model)
+```
+
+
+
+
+
+
+
+```{r}
+
+library(ggplot2)
+
+pd  <- position_dodge(width = 0.8) 
+pjd <- position_jitterdodge(dodge.width = 0.8, jitter.width = 0.05)
+
+mem_plot <- ggplot(pictus_ADULT_TELO,
+       aes(x = Clade,
+           y = MTG_MAY_sc,
+           fill = Treatment,
+           shape = Treatment)) +     
+  # jittered points
+  geom_point(position = pjd,
+             size      = 2.5,
+             alpha     = 0.2,
+             colour    = "black") +
+
+  # mean ± SE
+  stat_summary(
+    aes(fill = Treatment),
+    fun.data = mean_se,
+    geom = "errorbar",
+    size = 2,
+    width = 0,
+    position = pd
+  ) +
+  stat_summary(
+    aes(fill = Treatment),
+    fun = mean,
+    geom = "point",
+    shape = 21,
+    size = 3,
+    colour = "black",
+    position = pd
+  ) +
+annotate("text", x =0.825, y = 3, label = "a", size = 6, color = "black") + 
+annotate("text", x =1.175, y = 3, label = "a", size = 6, color = "black") + 
+  annotate("text", x =1.825, y = 3, label = "a", size = 6, color = "black") + 
+  annotate("text", x =2.175, y = 3, label = "a", size = 6, color = "black") + 
+  
+  scale_y_continuous(
+  labels = scales::number_format(accuracy = 0.01, width = 6)
+)+
+
+  #scale_shape_manual(values = c(16, 17)) +
+  scale_fill_manual(values = c(Warm = "#9E2A2F",
+                               Cool = "#4A90E2")) +
+  labs(x = "Clade", y = "Mitochondrial content") +
+  theme_classic() +
+  theme(
+    axis.title = element_text(size = 16, colour = "black"),   # black axis titles
+    axis.text  = element_text(size = 14, colour = "black"),   # black tick labels
+    axis.line  = element_line(linewidth = 1.2, colour = "black"),  # thicker axis lines
+    legend.position = "none"
+  )
+
+mem_plot
+```
+
+
+```{r}
+ggsave("plots/mem_plot.tiff", mem_plot, width = 4, height = 3, dpi = 300)
+
+```
+
+```{r}
+library(gridExtra)
+molecular.figure <- grid.arrange(telo_boxplot, tert_boxplot,  mem_boxplot,ros_boxplot, ncol= 2)
+```
+
+
+```{r}
+view(molecular.figure)
+```
+
+```{r}
+telo_plot <- telo_plot + coord_fixed(ratio = 3/4)   # height = 3, width = 4
+tert_lot <- tert_plot + coord_fixed(ratio = 3/4) 
+ros_lot <- ros_plot + coord_fixed(ratio = 3/4) 
+mem_lot <- mem_plot + coord_fixed(ratio = 3/4) 
+```
+
+
+```{r}
+molecular.figure <- ggpubr::ggarrange(
+  telo_plot, tert_plot,
+  mem_plot, ros_plot,
+  ncol = 2, nrow = 2,
+  widths = c(1, 1),    # relative widths of columns
+  heights = c(1, 1)    # relative heights of rows
+) +
+  annotate("text",
+           x = c(0.024, 0.5, 0.024, 0.5),
+           y = c(0.98, 0.98, 0.5, 0.5),
+           label = c("A)", "B)", "C)", "D)"),
+           size = 4, fontface = "bold")
+molecular.figure
+```
+
+
+```{r}
+ggsave("plots/molecular.figure.tiff", molecular.figure, width = 7, height = 6, dpi = 300)
+```
+
+
+
+## MORPHOLOGY
+
+
+
+
+
+
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+
+# 1. Grab only numeric columns (and keep ID for plotting if needed)
+numeric_data <- pictus_ADULT_TELO %>%
+  dplyr::select(where(is.numeric), ID)
+
+# 2. Pivot longer (exclude BCI_MAY itself to avoid self-plot)
+long_numeric <- numeric_data %>%
+  pivot_longer(cols = -c(ID, D_RTL),
+               names_to = "Variable", values_to = "Value")
+
+# 3. Plot BCI_MAY vs each numeric variable
+ggplot(long_numeric, aes(x = D_RTL, y = Value)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = FALSE, color = "red") +
+  facet_wrap(~ Variable, scales = "free_y") +
+  theme_bw() +
+  labs(title = "BCI_MAY.y vs other numeric variables",
+       x = "BCI_MAY.y", y = "Value")
+
+```
+
+
+
+
+```{r}
+SVL_final <- lmer(D_SVL ~ MAY_RTL+Treatment*Clade + (1|Population), data =pictus_ADULT_TELO)
+summary(SVL_final)
+```
+
+```{r}
+# Keep only rows with non-missing D_SVL and MAY
+complete_data <- pictus_ADULT_TELO %>%
+  filter(!is.na(CHANGE_SVL) & !is.na(MAY))
+
+# Fit model
+resid_model <- lm(CHANGE_SVL ~ MAY, data = complete_data)
+
+# Add residuals back to the complete dataset
+complete_data$resid_D_SVL <- resid(resid_model)
+
+chris_model <- lmer(resid_D_SVL~D_RTL +Treatment*Clade + (1|Population), data =complete_data)
+summary(chris_model)
+```
+
+```{r}
+SVL_TERT<-ggplot(complete_data, aes(x = resid_D_SVL, y =MAY_RTL)) +
+  geom_point(size = 3, alpha = 0.7) +
+  geom_smooth(method = "lm", se = FALSE) +
+  #facet_wrap(~ Clade) +
+  theme_classic(base_size = 14) +
+  labs( x = "Residual SVL TERT",
+       y = "RTL D") +
+  #facet_grid(~Population)+
+  theme(legend.position = "top",
+        strip.background = element_rect(fill = "grey90", color = NA),
+        strip.text = element_text(face = "bold"))
+SVL_TERT
+```
+
+
+
+```{r}
+
+library(ggplot2)
+
+pd  <- position_dodge(width = 0.8) 
+pjd <- position_jitterdodge(dodge.width = 0.8, jitter.width = 0.05)
+
+SVL_plot <- ggplot(pictus_ADULT_TELO,
+       aes(x = Clade,
+           y = CHANGE_SVL,
+           fill = Treatment,
+           shape = Treatment)) +     
+  # jittered points
+  geom_point(position = pjd,
+             size      = 2.5,
+             alpha     = 0.2,
+             colour    = "black") +
+
+  # mean ± SE
+  stat_summary(
+    aes(fill = Treatment),
+    fun.data = mean_se,
+    geom = "errorbar",
+    size = 2,
+    width = 0,
+    position = pd
+  ) +
+  stat_summary(
+    aes(fill = Treatment),
+    fun = mean,
+    geom = "point",
+    shape = 21,
+    size = 4,
+    colour = "black",
+    position = pd
+  ) +
+
+  
+  scale_y_continuous(
+  labels = scales::number_format(accuracy = 0.01, width = 6)
+)+
+
+  scale_shape_manual(values = c(16, 17)) +
+  scale_fill_manual(values = c(Warm = "#9E2A2F",
+                               Cool = "#4A90E2")) +
+  labs(x = "Clade", y = "SVL change (cm)") +
+  theme_classic() +
+  theme(
+    axis.title = element_text(size = 16, colour = "black"),   # black axis titles
+    axis.text  = element_text(size = 14, colour = "black"),   # black tick labels
+    axis.line  = element_line(linewidth = 1.2, colour = "black"),  # thicker axis lines
+    legend.position = "none"
+  )
+
+SVL_plot
+
+
+```
+
+
+```{r}
+SVL_TERT<-ggplot(pictus_ADULT_TELO, aes(x = MAY, y =D_SVL)) +
+  geom_point(size = 3, alpha = 0.7) +
+  geom_smooth(method = "lm", se = FALSE) +
+  #facet_wrap(~ Clade) +
+  theme_classic(base_size = 14) +
+  labs( x = "TERT expression (MAY)",
+       y = "SVL Change (cm)") +
+  #facet_grid(~Population)+
+  theme(legend.position = "top",
+        strip.background = element_rect(fill = "grey90", color = NA),
+        strip.text = element_text(face = "bold"))
+SVL_TERT
+```
+
+```{r}
+
+library(ggplot2)
+
+pd  <- position_dodge(width = 0.8) 
+pjd <- position_jitterdodge(dodge.width = 0.8, jitter.width = 0.05)
+
+BCI_plot <- ggplot(pictus_ADULT_TELO,
+       aes(x = Clade,
+           y = D_BCI,
+           fill = Treatment,
+           shape = Treatment)) +     
+  # jittered points
+  geom_point(position = pjd,
+             size      = 2.5,
+             alpha     = 0.2,
+             colour    = "black") +
+
+  # mean ± SE
+  stat_summary(
+    aes(fill = Treatment),
+    fun.data = mean_se,
+    geom = "errorbar",
+    size = 2,
+    width = 0,
+    position = pd
+  ) +
+  stat_summary(
+    aes(fill = Treatment),
+    fun = mean,
+    geom = "point",
+    shape = 21,
+    size = 4,
+    colour = "black",
+    position = pd
+  ) +
+
+  
+  scale_y_continuous(
+  labels = scales::number_format(accuracy = 0.01, width = 6)
+)+
+
+  scale_shape_manual(values = c(16, 17)) +
+  scale_fill_manual(values = c(Warm = "#9E2A2F",
+                               Cool = "#4A90E2")) +
+  labs(x = "Clade", y = "BCI change") +
+  theme_classic() +
+  theme(
+    axis.title = element_text(size = 16, colour = "black"),   # black axis titles
+    axis.text  = element_text(size = 14, colour = "black"),   # black tick labels
+    axis.line  = element_line(linewidth = 1.2, colour = "black"),  # thicker axis lines
+    legend.position = "none"
+  )
+
+BCI_plot
+
+
+```
+
+
+```{r}
+
+BCI_model <- lmer(D_BCI ~MAY_RTL+Treatment+Clade + (1|Population), data =pictus_ADULT_TELO)
+
+summary(BCI_model)
+#anova(Membrane_model)
+#emmeans(BCI_model, pairwise ~ Treatment)
+```
+
+```{r}
+BCI_mem<- ggplot(pictus_ADULT_TELO, aes(x = Membrane_poten_May, y =D_BCI)) +
+  geom_point(size = 3, alpha = 0.7) +
+  geom_smooth(method = "lm", se = FALSE) +
+  #facet_wrap(~ Clade) +
+  theme_classic(base_size = 14) +
+  labs( x = "Membrane potential",
+       y = "BCI Change") +
+  #facet_grid(~Population)+
+  theme(legend.position = "top",
+        strip.background = element_rect(fill = "grey90", color = NA),
+        strip.text = element_text(face = "bold"))
+BCI_mem
+```
+
+```{r}
+morph.figure <- ggpubr::ggarrange(
+  SVL_plot, BCI_plot,
+  ncol = 1, nrow = 2,
+  widths = c(1, 1),    # relative widths of columns
+  heights = c(1, 1)    # relative heights of rows
+) +
+  annotate("text",
+           x = c(0.024, 0.024),
+           y = c(0.98, 0.55),
+           label = c("A)", "B)"),
+           size = 4, fontface = "bold")
+morph.figure
+```
+
+```{r}
+ggsave("plots/morph.figure.tiff", morph.figure, width = 4, height = 8, dpi = 300)
+```
+
+
+
+

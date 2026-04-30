@@ -1,0 +1,290 @@
+---
+title: "Chapter_3_trials_misc"
+output: html_document
+---
+
+---
+title: "PCA"
+author: "Daniel Ritchie"
+date: "2025-08-22"
+output: html_document
+---
+
+```{r}
+## IMPORT DATA
+pictus_ADULT_TELO <- read_csv("~/Desktop/phd/Documents/Chapter 3/Datasheets/ADULT_TELO_FULL.csv")
+pictus_ADULT_TELO <- pictus_ADULT_TELO %>%
+  mutate(
+    Membrane_poten_Jan = MTO_JAN / MTG_JAN,
+    Membrane_poten_May = MTO_MAY / MTG_MAY,
+    Membrane_poten_Change = (MTO_MAY / MTG_MAY) - (MTO_JAN / MTG_JAN)
+  )
+pictus_ADULT_TELO <- pictus_ADULT_TELO %>%
+  mutate(
+    Superoxide_Jan = MSR_JAN / MTG_JAN,
+    Superoxide_May = MSR_MAY / MTG_MAY,
+    Superoxide_Change = (MSR_MAY / MTG_MAY) - (MSR_JAN / MTG_JAN),
+    Density_Change =(MTG_MAY-MTG_JAN)
+  )
+
+
+
+# 1. Put Mass + SVL into long format
+pictus_long <- pictus_ADULT_TELO %>%
+  dplyr::select(ID, Population,
+         Mass_JAN, SVL_JAN,
+         Mass_MAY, SVL_MAY) %>%
+  pivot_longer(cols = c(Mass_JAN, SVL_JAN, Mass_MAY, SVL_MAY),
+               names_to = c("Trait", "Month"),
+               names_pattern = "(.*)_(JAN|MAY)",
+               values_to = "Value") %>%
+  pivot_wider(names_from = Trait, values_from = Value)
+
+# 2. Calculate BCI per Population × Month
+BCI_data <- pictus_long %>%
+  mutate(lnMass = log(Mass),
+         lnSVL  = log(SVL)) %>%
+  group_by(Population, Month) %>%
+  group_modify(~ {
+    df <- .x %>% filter(!is.na(lnMass), !is.na(lnSVL))
+    fit <- lm(lnMass ~ lnSVL, data = df)
+    df$BCI_raw <- residuals(fit)
+    df$BCI <- as.numeric(scale(df$BCI_raw))
+    df
+  }) %>%
+  ungroup()
+
+# 3. Go back to wide format with both raw + standardized residuals
+BCI_wide <- BCI_data %>%
+   dplyr::select(ID, Population, Month, BCI_raw, BCI) %>%
+  pivot_wider(names_from = Month,
+              values_from = c(BCI_raw, BCI),
+              names_sep = "_")
+
+# 4. Join back to main dataset
+pictus_ADULT_TELO <- pictus_ADULT_TELO %>%
+  left_join(BCI_wide, by = c("ID", "Population"))
+
+## Create D for SVL
+Xi <- pictus_ADULT_TELO$SVL_JAN       # baseline RTL
+X2 <- pictus_ADULT_TELO$SVL_MAY       # follow-up RTL
+
+S1 <- sd(Xi, na.rm = TRUE)
+S2 <- sd(X2, na.rm = TRUE)
+r <- cor(Xi, X2, use = "complete.obs")
+p <- r * S2 / S1
+D_SVL <- p * (Xi - mean(Xi, na.rm = TRUE)) - (X2 - mean(X2, na.rm = TRUE))
+pictus_ADULT_TELO$D_SVL <- D_SVL
+
+## Create D for MASS
+Xi <- pictus_ADULT_TELO$Mass_JAN       # baseline RTL
+X2 <- pictus_ADULT_TELO$Mass_MAY       # follow-up RTL
+
+S1 <- sd(Xi, na.rm = TRUE)
+S2 <- sd(X2, na.rm = TRUE)
+r <- cor(Xi, X2, use = "complete.obs")
+p <- r * S2 / S1
+D_Mass <- p * (Xi - mean(Xi, na.rm = TRUE)) - (X2 - mean(X2, na.rm = TRUE))
+pictus_ADULT_TELO$D_Mass <- D_Mass
+
+
+## Create D for BCI
+Xi <- pictus_ADULT_TELO$BCI_JAN      # baseline RTL
+X2 <- pictus_ADULT_TELO$BCI_MAY      # follow-up RTL
+
+S1 <- sd(Xi, na.rm = TRUE)
+S2 <- sd(X2, na.rm = TRUE)
+r <- cor(Xi, X2, use = "complete.obs")
+p <- r * S2 / S1
+D_BCI <- p * (Xi - mean(Xi, na.rm = TRUE)) - (X2 - mean(X2, na.rm = TRUE))
+pictus_ADULT_TELO$D_BCI <- D_BCI
+
+Xi <- pictus_ADULT_TELO$JAN_RTL       # baseline RTL
+X2 <- pictus_ADULT_TELO$MAY_RTL       # follow-up RTL
+
+S1 <- sd(Xi, na.rm = TRUE)
+S2 <- sd(X2, na.rm = TRUE)
+r <- cor(Xi, X2, use = "complete.obs")
+p <- r * S2 / S1
+D_RTL <- p * (Xi - mean(Xi, na.rm = TRUE)) - (X2 - mean(X2, na.rm = TRUE))
+pictus_ADULT_TELO$D_RTL <- D_RTL
+
+```
+
+
+
+
+```{r}
+## IMPORT DATA
+pictus_CTMAX <- read_csv("~/Desktop/phd/Documents/Chapter 3/Datasheets/CTmax_DR_2024.csv")
+pictus_CTMAX$Treatment <- as.factor(pictus_CTMAX$Treatment)
+pictus_CTMAX$Pop <- as.factor(pictus_CTMAX$Pop)
+pictus_CTMAX$Pop <- factor(pictus_CTMAX$Pop, levels = c("STURT", "MR", "KNGA", "NRKT"))
+pictus_CTMAX$Treatment <- factor(pictus_CTMAX$Treatment, levels = c("Warm", "Cool"))
+```
+
+```{r}
+library(dplyr)
+
+all_traits <- d_params %>%
+  mutate(ID = as.character(ID)) %>%
+  inner_join(pictus_ADULT_TELO %>% mutate(ID = as.character(ID)), by = "ID") %>%
+  inner_join(pictus_CTMAX %>% mutate(ID = as.character(ID)), by = "ID")
+
+```
+
+
+```{r}
+library(dplyr)
+library(ggfortify)
+
+
+pca_vars <- all_traits %>%
+  dplyr::select(ID, Treatment,Clade, 
+              MAY_RTL, MAY, Superoxide_May,Membrane_poten_May, 
+         Tgape, Vtmax, Ctmin,     
+         topt, rmax, breadth,           
+         D_SVL, D_Mass, D_BCI)  
+
+pca_data <- pca_vars %>%
+  drop_na()
+
+pca_res <- prcomp(pca_data %>% dplyr::select(-ID, -Treatment, -Clade),
+                  center = TRUE, scale. = TRUE)
+
+
+autoplot(pca_res,
+         data = pca_data,
+         colour = "Treatment",
+         shape = "Clade",
+         size = 3)
+
+```
+
+```{r}
+library(factoextra)
+library(dplyr)
+
+pca_data <- pca_data %>%
+  dplyr::mutate(Group = interaction(Clade, Treatment, sep = "_"))
+
+
+pca_res <- prcomp(pca_data %>%  dplyr::select(-ID, -Clade, -Treatment, -Group),
+                  center = TRUE, scale. = TRUE)
+
+
+fviz_pca_biplot(
+  pca_res,
+  label = "var",                  
+  habillage = pca_data$Group,     
+  addEllipses = TRUE,             
+  ellipse.level = 0.95,       
+  ellipse.type = "norm",          
+  repel = TRUE,                  
+  col.var = "black"               
+
+```
+
+```{r}
+library(brms)
+library(dplyr)
+library(tidyr)
+
+# Prepare data in long format for multivariate model
+pca_data_long <- all_traits %>%
+  dplyr::select(ID, Treatment, Clade, Population,
+                MAY_RTL, MAY, Superoxide_May, Membrane_poten_May, 
+                Tgape, Vtmax, Ctmin,     
+                topt, rmax, breadth,           
+                D_SVL, D_Mass, D_BCI) %>%
+  pivot_longer(cols = c(MAY_RTL, Superoxide_May, Membrane_poten_May, 
+                       Tgape, Vtmax, Ctmin, topt, rmax, breadth,
+                       D_SVL, D_Mass, D_BCI),
+               names_to = "trait",
+               values_to = "value")
+
+# Create the multivariate formula
+multi_formula <- bf(
+  value ~ 0 + trait + Treatment:trait + Clade:trait + 
+          (1 | p | Population) + (1 | id | ID)
+)
+
+# Fit the multivariate model
+multi_model <- brm(
+  multi_formula,
+  data = pca_data_long,
+  family = gaussian(),
+  chains = 4, 
+  cores = 4,
+  iter = 10000,
+  control = list(adapt_delta = 0.95, max_treedepth = 15)
+)
+
+# Summary of the model
+summary(multi_model)
+
+```
+
+
+```{r}
+summary(multi_model)          # Fixed effects and random effects
+    # Residual correlation among traits
+```
+
+
+```{r}
+summary(multi_model)$fixed
+
+```
+```{r}
+ fixef(multi_model)
+
+```
+
+```{r}
+cor_resid(multi_model)
+
+```
+
+```{r}
+conditional_effects(multi_model, effects = "Treatment:Clade", resp = "MAY")
+
+```
+
+```{r}
+library(DiagrammeR)
+
+grViz("
+digraph telomere {
+  graph [rankdir = LR]
+
+  # Nodes
+  CladePop [label = 'Clade / Population', shape = box, style = filled, fillcolor = lightgrey]
+  Treatment [label = 'Treatment\n(Warm / Cool)', shape = box, style = filled, fillcolor = orange]
+  Thermal [label = 'Thermal match\n(topt, breadth, Tgape, VTmax, Ctmin)', shape = box, style = filled, fillcolor = lightblue]
+  Mito [label = 'Mito function\n(Membrane potential)', shape = box, style = filled, fillcolor = lightgreen]
+  ROS [label = 'Oxidative stress\n(Superoxide_May)', shape = box, style = filled, fillcolor = lightgreen]
+  Growth [label = 'Growth & Condition\n(D_SVL, D_Mass, D_BCI)', shape = box, style = filled, fillcolor = plum]
+  TERT [label = 'TERT expression\n(Telomerase)', shape = box, style = filled, fillcolor = gold]
+  TL [label = 'Δ Telomere length', shape = ellipse, style = filled, fillcolor = white]
+
+  # Edges
+  CladePop -> Treatment
+  CladePop -> Thermal
+  CladePop -> TERT
+  Treatment -> Thermal
+  Treatment -> Mito
+  Treatment -> TERT
+  Thermal -> Mito
+  Thermal -> ROS
+  Mito -> ROS
+  ROS -> TERT
+  Mito -> TL
+  Growth -> TL
+  ROS -> TL
+  TERT -> TL
+}
+")
+
+
+```
